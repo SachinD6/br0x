@@ -7,7 +7,7 @@ use br0x_core::session::{Session, SessionStore, StoredTab};
 use br0x_core::tab::{Action, TabId, TabSnapshot};
 use gtk4::glib;
 use gtk4::prelude::*;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Instant;
 use webkit6::prelude::*;
@@ -80,6 +80,12 @@ impl Tabs {
         }
         self.metas.push(meta);
         id
+    }
+
+    fn remove(&mut self, idx: usize) {
+        if idx < self.metas.len() {
+            self.metas.remove(idx);
+        }
     }
 }
 
@@ -165,17 +171,45 @@ fn apply_filter(view: &webkit6::WebView) {
     });
 }
 
-fn with_scheme(input: &str) -> String {
-    if input.contains("://") { input.to_owned() } else { format!("https://{input}") }
+/// Turn raw entry text into something loadable.
+/// Plain words become a search, hostnames gain https.
+fn resolve_input(input: &str) -> String {
+    let t = input.trim();
+    if t.contains("://") {
+        t.to_owned()
+    } else if t.contains(' ') || !t.contains('.') {
+        let q: Vec<&str> = t.split_whitespace().collect();
+        format!("https://duckduckgo.com/?q={}", q.join("+"))
+    } else {
+        format!("https://{t}")
+    }
 }
 
 fn view_at(notebook: &gtk4::Notebook, i: u32) -> Option<webkit6::WebView> {
     notebook.nth_page(Some(i)).and_then(|p| p.downcast().ok())
 }
 
+fn active_view(notebook: &gtk4::Notebook) -> Option<webkit6::WebView> {
+    notebook.current_page().and_then(|i| view_at(notebook, i))
+}
+
+fn refresh_nav(notebook: &gtk4::Notebook, back: &gtk4::Button, fwd: &gtk4::Button) {
+    let (can_back, can_fwd) = active_view(notebook)
+        .map(|v| (v.can_go_back(), v.can_go_forward()))
+        .unwrap_or((false, false));
+    back.set_sensitive(can_back);
+    fwd.set_sensitive(can_fwd);
+}
+
 /// Hide background tabs so WebKit throttles rAF and timers.
 /// Audible tabs stay unmuted. Parked tabs reload on focus.
-fn update_visibility(notebook: &gtk4::Notebook, tabs: &Rc<RefCell<Tabs>>, entry: &gtk4::Entry) {
+fn update_visibility(
+    notebook: &gtk4::Notebook,
+    tabs: &Rc<RefCell<Tabs>>,
+    entry: &gtk4::Entry,
+    back: &gtk4::Button,
+    fwd: &gtk4::Button,
+) {
     let current = notebook.current_page();
     let mut state = tabs.borrow_mut();
     for (idx, meta) in state.metas.iter_mut().enumerate() {
@@ -205,6 +239,25 @@ fn update_visibility(notebook: &gtk4::Notebook, tabs: &Rc<RefCell<Tabs>>, entry:
             }
         }
     }
+    refresh_nav(notebook, back, fwd);
+}
+
+fn close_tab(
+    notebook: &gtk4::Notebook,
+    tabs: &Rc<RefCell<Tabs>>,
+    session: &Rc<webkit6::NetworkSession>,
+    entry: &gtk4::Entry,
+    back: &gtk4::Button,
+    fwd: &gtk4::Button,
+    idx: u32,
+) {
+    notebook.remove_page(Some(idx));
+    tabs.borrow_mut().remove(idx as usize);
+    if notebook.n_pages() == 0 {
+        add_tab(notebook, tabs, session, entry, back, fwd, "https://example.com", false);
+    } else {
+        update_visibility(notebook, tabs, entry, back, fwd);
+    }
 }
 
 fn add_tab(
@@ -212,17 +265,21 @@ fn add_tab(
     tabs: &Rc<RefCell<Tabs>>,
     session: &webkit6::NetworkSession,
     entry: &gtk4::Entry,
+    back: &gtk4::Button,
+    fwd: &gtk4::Button,
     url: &str,
     lazy: bool,
 ) {
     let view = new_view(session);
-    tabs.borrow_mut().push(lazy.then(|| with_scheme(url)));
+    tabs.borrow_mut().push(lazy.then(|| resolve_input(url)));
     if !lazy {
-        view.load_uri(&with_scheme(url));
+        view.load_uri(&resolve_input(url));
     } else {
         view.load_uri("about:blank");
     }
     let label = gtk4::Label::new(Some("New tab"));
+    label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+    label.set_max_width_chars(24);
     let label_clone = label.clone();
     let view_clone = view.clone();
     view.connect_title_notify(move |_| {
@@ -230,9 +287,63 @@ fn add_tab(
             label_clone.set_text(&t);
         }
     });
-    notebook.append_page(&view, Some(&label));
-    notebook.set_current_page(Some(notebook.n_pages() - 1));
-    update_visibility(notebook, tabs, entry);
+    let entry_clone = entry.clone();
+    let view_uri = view.clone();
+    view.connect_uri_notify(move |_| {
+        if let Some(u) = view_uri.uri() {
+            if u != "about:blank" {
+                entry_clone.set_text(u.as_str());
+            }
+        }
+    });
+    view.connect_load_failed(|_, _, uri, err| {
+        eprintln!("br0x: load failed {uri}: {err}");
+        false
+    });
+    view.connect_web_process_terminated(|_, reason| {
+        eprintln!("br0x: web process terminated: {reason:?}");
+    });
+    let close_btn = gtk4::Button::from_icon_name("window-close-symbolic");
+    close_btn.add_css_class("flat");
+    close_btn.add_css_class("circular");
+    close_btn.set_tooltip_text(Some("Close tab"));
+    let tab_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
+    tab_box.append(&label);
+    tab_box.append(&close_btn);
+    let page_num = notebook.append_page(&view, Some(&tab_box));
+    {
+        let nb_weak = notebook.downgrade();
+        let tabs_clone = tabs.clone();
+        let sess_clone = Rc::new(session.clone());
+        let entry_clone = entry.clone();
+        let back_clone = back.clone();
+        let fwd_clone = fwd.clone();
+        close_btn.connect_clicked(move |_| {
+            if let Some(nb) = nb_weak.upgrade() {
+                close_tab(
+                    &nb,
+                    &tabs_clone,
+                    &sess_clone,
+                    &entry_clone,
+                    &back_clone,
+                    &fwd_clone,
+                    page_num,
+                );
+            }
+        });
+    }
+    {
+        let nb_weak = notebook.downgrade();
+        let back_clone = back.clone();
+        let fwd_clone = fwd.clone();
+        view.connect_load_changed(move |_, _| {
+            if let Some(nb) = nb_weak.upgrade() {
+                refresh_nav(&nb, &back_clone, &fwd_clone);
+            }
+        });
+    }
+    notebook.set_current_page(Some(page_num));
+    update_visibility(notebook, tabs, entry, back, fwd);
 }
 
 /// 5s tick: sample pressure, ask core, freeze or park background tabs.
@@ -301,6 +412,7 @@ fn save_session(notebook: &gtk4::Notebook, tabs: &Rc<RefCell<Tabs>>) {
                     let u = v
                         .uri()
                         .map(|s| s.to_string())
+                        .filter(|s| s != "about:blank")
                         .or_else(|| meta.pending_url.clone())
                         .unwrap_or_default();
                     let t = v.title().map(|s| s.to_string()).unwrap_or_default();
@@ -321,18 +433,22 @@ fn restore_session(
     tabs: &Rc<RefCell<Tabs>>,
     session: &webkit6::NetworkSession,
     entry: &gtk4::Entry,
+    back: &gtk4::Button,
+    fwd: &gtk4::Button,
 ) -> bool {
     let store = SessionStore::new(session_path());
     let Ok(mut stored) = store.load() else {
         return false;
     };
+    stored.tabs.retain(|t| !t.url.is_empty());
     if stored.tabs.is_empty() {
         return false;
     }
     stored.tabs.sort_by_key(|t| t.order);
     for (idx, tab) in stored.tabs.iter().enumerate() {
-        add_tab(notebook, tabs, session, entry, &tab.url, idx != 0);
+        add_tab(notebook, tabs, session, entry, back, fwd, &tab.url, idx != 0);
     }
+    notebook.set_current_page(Some(0));
     true
 }
 
@@ -341,24 +457,35 @@ fn build_ui(app: &adw::Application) {
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title("br0x")
-        .default_width(1100)
-        .default_height(750)
+        .default_width(1200)
+        .default_height(800)
         .build();
 
+    let back = gtk4::Button::from_icon_name("go-previous-symbolic");
+    back.set_tooltip_text(Some("Back"));
+    let fwd = gtk4::Button::from_icon_name("go-next-symbolic");
+    fwd.set_tooltip_text(Some("Forward"));
+    let reload = gtk4::Button::from_icon_name("view-refresh-symbolic");
+    reload.set_tooltip_text(Some("Reload"));
     let entry = gtk4::Entry::new();
     entry.set_placeholder_text(Some("Search or address"));
     entry.set_hexpand(true);
+    let new_btn = gtk4::Button::from_icon_name("tab-new-symbolic");
+    new_btn.set_tooltip_text(Some("New tab"));
 
-    let new_btn = gtk4::Button::with_label("New tab");
-    let header = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
-    header.append(&entry);
-    header.append(&new_btn);
+    let header = adw::HeaderBar::new();
+    header.pack_start(&back);
+    header.pack_start(&fwd);
+    header.pack_start(&reload);
+    header.set_title_widget(Some(&entry));
+    header.pack_end(&new_btn);
+    window.set_titlebar(Some(&header));
 
     let notebook = gtk4::Notebook::new();
     notebook.set_scrollable(true);
+    notebook.set_vexpand(true);
 
     let layout = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-    layout.append(&header);
     layout.append(&notebook);
     window.set_content(Some(&layout));
 
@@ -370,10 +497,21 @@ fn build_ui(app: &adw::Application) {
         let tabs_clone = tabs.clone();
         let sess_clone = sess.clone();
         let entry_clone = entry.clone();
+        let back_clone = back.clone();
+        let fwd_clone = fwd.clone();
         entry.connect_activate(move |e| {
             if let Some(nb) = nb_weak.upgrade() {
                 let url = e.text().to_string();
-                add_tab(&nb, &tabs_clone, &sess_clone, &entry_clone, url.trim(), false);
+                add_tab(
+                    &nb,
+                    &tabs_clone,
+                    &sess_clone,
+                    &entry_clone,
+                    &back_clone,
+                    &fwd_clone,
+                    url.trim(),
+                    false,
+                );
             }
         });
     }
@@ -382,25 +520,65 @@ fn build_ui(app: &adw::Application) {
         let tabs_clone = tabs.clone();
         let sess_clone = sess.clone();
         let entry_clone = entry.clone();
+        let back_clone = back.clone();
+        let fwd_clone = fwd.clone();
         new_btn.connect_clicked(move |_| {
             if let Some(nb) = nb_weak.upgrade() {
-                add_tab(&nb, &tabs_clone, &sess_clone, &entry_clone, "https://example.com", false);
+                add_tab(
+                    &nb,
+                    &tabs_clone,
+                    &sess_clone,
+                    &entry_clone,
+                    &back_clone,
+                    &fwd_clone,
+                    "https://example.com",
+                    false,
+                );
+            }
+        });
+    }
+    {
+        let tabs_clone = tabs.clone();
+        let entry_clone = entry.clone();
+        let back_clone = back.clone();
+        let fwd_clone = fwd.clone();
+        notebook.connect_switch_page(move |nb, _, _| {
+            update_visibility(nb, &tabs_clone, &entry_clone, &back_clone, &fwd_clone);
+        });
+    }
+    {
+        let nb_weak = notebook.downgrade();
+        back.connect_clicked(move |_| {
+            if let Some(nb) = nb_weak.upgrade() {
+                if let Some(v) = active_view(&nb) {
+                    v.go_back();
+                }
             }
         });
     }
     {
         let nb_weak = notebook.downgrade();
-        let tabs_clone = tabs.clone();
-        let entry_clone = entry.clone();
-        notebook.connect_switch_page(move |_, _, _| {
+        fwd.connect_clicked(move |_| {
             if let Some(nb) = nb_weak.upgrade() {
-                update_visibility(&nb, &tabs_clone, &entry_clone);
+                if let Some(v) = active_view(&nb) {
+                    v.go_forward();
+                }
+            }
+        });
+    }
+    {
+        let nb_weak = notebook.downgrade();
+        reload.connect_clicked(move |_| {
+            if let Some(nb) = nb_weak.upgrade() {
+                if let Some(v) = active_view(&nb) {
+                    v.reload();
+                }
             }
         });
     }
 
-    if !restore_session(&notebook, &tabs, &sess, &entry) {
-        add_tab(&notebook, &tabs, &sess, &entry, "https://example.com", false);
+    if !restore_session(&notebook, &tabs, &sess, &entry, &back, &fwd) {
+        add_tab(&notebook, &tabs, &sess, &entry, &back, &fwd, "https://example.com", false);
     }
     ensure_filter(&notebook);
 
@@ -415,7 +593,7 @@ fn build_ui(app: &adw::Application) {
         });
     }
     {
-        let tick = Cell::new(0u32);
+        let tick = std::cell::Cell::new(0u32);
         let nb_weak = notebook.downgrade();
         let tabs_clone = tabs.clone();
         glib::timeout_add_seconds_local(5, move || {
