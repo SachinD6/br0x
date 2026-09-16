@@ -6,7 +6,6 @@ use br0x_core::policy;
 use br0x_core::session::{Session, SessionStore, StoredTab};
 use br0x_core::tab::{Action, TabId, TabSnapshot};
 use gtk4::glib;
-use gtk4::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Instant;
@@ -479,15 +478,15 @@ fn build_ui(app: &adw::Application) {
     header.pack_start(&reload);
     header.set_title_widget(Some(&entry));
     header.pack_end(&new_btn);
-    window.set_titlebar(Some(&header));
 
     let notebook = gtk4::Notebook::new();
     notebook.set_scrollable(true);
     notebook.set_vexpand(true);
 
-    let layout = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-    layout.append(&notebook);
-    window.set_content(Some(&layout));
+    let toolbar = adw::ToolbarView::new();
+    toolbar.add_top_bar(&header);
+    toolbar.set_content(Some(&notebook));
+    window.set_content(Some(&toolbar));
 
     let tabs = Rc::new(RefCell::new(Tabs::new()));
     let sess = Rc::new(session);
