@@ -109,7 +109,7 @@ fn shared_session() -> webkit6::NetworkSession {
 }
 
 fn new_view(session: &webkit6::NetworkSession) -> webkit6::WebView {
-    let view = webkit6::WebView::builder().property("network-session", session).build();
+    let view = webkit6::WebView::builder().network_session(session).build();
     apply_filter(&view);
     view
 }
@@ -223,10 +223,11 @@ fn add_tab(
         view.load_uri("about:blank");
     }
     let label = gtk4::Label::new(Some("New tab"));
+    let label_clone = label.clone();
     let view_clone = view.clone();
     view.connect_title_notify(move |_| {
         if let Some(t) = view_clone.title() {
-            label.set_text(&t);
+            label_clone.set_text(&t);
         }
     });
     notebook.append_page(&view, Some(&label));
