@@ -1,0 +1,28 @@
+app-id: org.br0x.Browser
+runtime: org.gnome.Platform
+runtime-version: '48'
+sdk: org.gnome.Sdk
+command: br0x
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --talk-name=org.freedesktop.secrets
+modules:
+  - name: br0x
+    buildsystem: simple
+    sources:
+      - type: dir
+        path: ../..
+      - type: file
+        path: cargo-vendor.tar.gz
+    build-commands:
+      - tar xf cargo-vendor.tar.gz
+      - cargo --offline build --release -p br0x-shell-gtk
+      - install -Dm755 ../target/release/br0x /app/bin/br0x
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/br0x/cargo

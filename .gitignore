@@ -3,6 +3,8 @@
 /.flatpak-builder/
 *.flatpak
 *.flatpakref
+!.flatpak/
+!.flatpak/**
 *.rs.bk
 .DS_Store
 *~
