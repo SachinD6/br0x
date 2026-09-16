@@ -1,7 +1,13 @@
 //! Eviction policy: pure rules, no I/O.
 //! Exemptions always beat timeouts.
 
-use crate::tab::{Action, Exemption, PolicyParams, SysState, TabSnapshot};
+use crate::tab::{Action, Exemption, PolicyParams, SysState, TabId, TabSnapshot};
+
+/// One sweep over background tabs. The shell calls this on a 5s tick
+/// and applies freeze/park to real WebViews. Pure, no I/O.
+pub fn sweep(tabs: &[TabSnapshot], sys: &SysState) -> Vec<(TabId, Action)> {
+    tabs.iter().map(|t| (t.id, decide(t, sys))).filter(|(_, a)| *a != Action::Keep).collect()
+}
 
 fn bucket_params(tab_count: usize) -> PolicyParams {
     if tab_count <= 5 {
@@ -175,5 +181,13 @@ mod tests {
         let mut t = snap(1000);
         t.restored_secs_ago = Some(10);
         assert_eq!(decide(&t, &sys()), Action::Freeze);
+    }
+
+    #[test]
+    fn sweep_returns_only_actionable_tabs() {
+        let tabs = vec![snap(10), snap(200), snap(1000)];
+        let out = sweep(&tabs, &sys());
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|(_, a)| *a != Action::Keep));
     }
 }

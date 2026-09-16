@@ -4,5 +4,6 @@
 pub mod blocker;
 pub mod lifecycle;
 pub mod policy;
+pub mod sampler;
 pub mod session;
 pub mod tab;
