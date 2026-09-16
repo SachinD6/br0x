@@ -1,0 +1,22 @@
+# Context
+
+## Glossary
+
+- Tab: a single page a user opens, views, switches between, and closes.
+- Tab state: lifecycle stage of a tab. Values: active, standby, idle, parked.
+- Policy: rule set that decides when a tab changes state.
+- Exemption: user visible reason that stops freeze or park, such as sound, a call, a download, unsaved input, or a pin.
+- Freeze: reversible pause of background work in a tab that keeps the page in memory.
+- Park: reversible release of a tab from memory that keeps its identity in the tab strip.
+- Restore: act that brings a parked tab back to full use.
+- Process pool: helpers that run page content outside the main window.
+- Blocker: filter that stops ads and trackers before they load.
+- Session: saved set of open tabs that survives a restart or crash.
+- Thumbnail: small static preview shown while a parked tab restores.
+
+## States
+
+- Active: tab shows on screen now.
+- Standby: tab left the screen recently and keeps full behavior.
+- Idle: tab stayed unseen for minutes and runs with reduced background work.
+- Parked: tab stays listed but holds no live page until the user returns.

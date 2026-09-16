@@ -4,4 +4,3 @@ resolver = "2"
 
 [workspace.lints.clippy]
 cognitive_complexity = "warn"
-cyclomatic_complexity = "warn"
