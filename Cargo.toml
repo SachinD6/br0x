@@ -1,0 +1,7 @@
+[workspace]
+members = ["crates/br0x-core", "crates/br0x-shell-gtk"]
+resolver = "2"
+
+[workspace.lints.clippy]
+cognitive_complexity = "warn"
+cyclomatic_complexity = "warn"

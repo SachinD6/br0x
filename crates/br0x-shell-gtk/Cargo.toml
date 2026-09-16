@@ -1,0 +1,14 @@
+[package]
+name = "br0x-shell-gtk"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "br0x"
+path = "src/main.rs"
+
+[dependencies]
+br0x-core = { path = "../br0x-core" }
+gtk = { version = "0.9", package = "gtk4" }
+adw = { version = "0.7", package = "libadwaita" }
+webkit6 = "0.4"

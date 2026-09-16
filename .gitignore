@@ -1,0 +1,12 @@
+/target/
+/flatpak-build/
+/.flatpak-builder/
+*.flatpak
+*.flatpakref
+*.rs.bk
+.DS_Store
+*~
+.idea/
+.vscode/
+*.log
+/dist/
