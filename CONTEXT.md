@@ -12,6 +12,9 @@
 - Process pool: helpers that run page content outside the main window.
 - Blocker: filter that stops ads and trackers before they load.
 - Session: saved set of open tabs that survives a restart or crash.
+- Bookmark: user saved page (star button, Ctrl+D) that survives restarts and shows on the start page.
+- Frequent: start page section ranked by visit count, excluding internal and search result pages.
+- Suggestion: address bar dropdown row drawn from history while typing.
 - Thumbnail: small static preview shown while a parked tab restores.
 
 ## States

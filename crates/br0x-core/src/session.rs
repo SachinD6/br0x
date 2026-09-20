@@ -1,7 +1,8 @@
 //! Crash safe session store. Atomic write, lazy load.
 
+use crate::json_file;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// One stored tab. URLs and titles only, never page heap.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,15 +33,11 @@ impl SessionStore {
     }
 
     pub fn save(&self, session: &Session) -> std::io::Result<()> {
-        let bytes = serde_json::to_vec(session)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        write_atomic(&self.path, &bytes)
+        json_file::save(&self.path, session)
     }
 
     pub fn load(&self) -> std::io::Result<Session> {
-        let bytes = std::fs::read(&self.path)?;
-        serde_json::from_slice(&bytes)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        json_file::load(&self.path)
     }
 
     pub fn clear(&self) -> std::io::Result<()> {
@@ -49,16 +46,6 @@ impl SessionStore {
         }
         Ok(())
     }
-}
-
-fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
 }
 
 #[cfg(test)]

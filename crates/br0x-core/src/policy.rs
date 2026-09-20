@@ -11,11 +11,11 @@ pub fn sweep(tabs: &[TabSnapshot], sys: &SysState) -> Vec<(TabId, Action)> {
 
 fn bucket_params(tab_count: usize) -> PolicyParams {
     if tab_count <= 5 {
-        PolicyParams { standby_secs: 30, freeze_secs: 300, park_secs: 1800 }
+        PolicyParams { standby_secs: 30, freeze_secs: 300, park_secs: 900 }
     } else if tab_count <= 15 {
-        PolicyParams { standby_secs: 30, freeze_secs: 180, park_secs: 900 }
+        PolicyParams { standby_secs: 30, freeze_secs: 120, park_secs: 300 }
     } else {
-        PolicyParams { standby_secs: 15, freeze_secs: 90, park_secs: 480 }
+        PolicyParams { standby_secs: 15, freeze_secs: 60, park_secs: 180 }
     }
 }
 
