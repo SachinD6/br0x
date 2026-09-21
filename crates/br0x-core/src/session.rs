@@ -5,13 +5,20 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// One stored tab. URLs and titles only, never page heap.
+/// Everything except the URL defaults, so a session file written before a
+/// field existed still loads instead of losing every tab.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredTab {
+    #[serde(default)]
     pub id: u64,
     pub url: String,
+    #[serde(default)]
     pub title: String,
+    #[serde(default)]
     pub order: usize,
+    #[serde(default)]
     pub pinned: bool,
+    #[serde(default)]
     pub scroll_y: i32,
 }
 
@@ -79,5 +86,33 @@ mod tests {
     fn clear_missing_file_is_ok() {
         let store = SessionStore::new("/tmp/br0x-nope-missing/session.json");
         let _ = store.clear();
+    }
+
+    #[test]
+    fn old_session_file_without_new_fields_loads() {
+        let dir = std::env::temp_dir().join("br0x-test-session-old");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.json");
+        std::fs::write(&path, r#"{"tabs":[{"id":4,"url":"https://a.example","order":0}]}"#)
+            .unwrap();
+        let store = SessionStore::new(&path);
+        let session = store.load().unwrap();
+        assert_eq!(session.tabs.len(), 1);
+        assert_eq!(session.tabs[0].url, "https://a.example");
+        assert!(!session.tabs[0].pinned);
+        assert_eq!(session.tabs[0].scroll_y, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tab_without_url_is_rejected() {
+        let dir = std::env::temp_dir().join("br0x-test-session-nourl");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.json");
+        std::fs::write(&path, r#"{"tabs":[{"id":1,"title":"x"}]}"#).unwrap();
+        assert!(SessionStore::new(&path).load().is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

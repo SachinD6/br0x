@@ -24,8 +24,24 @@ impl BookmarkStore {
     }
 
     /// Missing file yields an empty list. Bookmarks must never block startup.
+    /// Corrupt JSON is moved aside so the next save cannot overwrite it.
     pub fn load(&self) -> Vec<Bookmark> {
-        json_file::load(&self.path).unwrap_or_default()
+        match json_file::load(&self.path) {
+            Ok(bookmarks) => bookmarks,
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::InvalidData {
+                    self.quarantine_corrupt();
+                }
+                Vec::new()
+            }
+        }
+    }
+
+    fn quarantine_corrupt(&self) {
+        match json_file::quarantine_corrupt(&self.path) {
+            Ok(target) => eprintln!("br0x: corrupt bookmarks moved to {}", target.display()),
+            Err(e) => eprintln!("br0x: could not move corrupt bookmarks: {e}"),
+        }
     }
 
     pub fn save(&self, bookmarks: &[Bookmark]) -> std::io::Result<()> {
@@ -101,5 +117,26 @@ mod tests {
         BookmarkStore::upsert(&mut list, "https://a.example", "A");
         store.save(&list).unwrap();
         assert_eq!(store.load(), list);
+    }
+
+    #[test]
+    fn corrupt_file_is_quarantined_not_overwritten() {
+        let dir = std::env::temp_dir().join("br0x-test-bookmarks").join("corrupt");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bookmarks.json");
+        std::fs::write(&path, b"[not json").unwrap();
+        let store = BookmarkStore::new(&path);
+        assert!(store.load().is_empty());
+        assert!(!path.exists());
+        let quarantined: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(quarantined.len(), 1);
+        assert!(quarantined[0].starts_with("bookmarks.json.corrupt."));
+        assert_eq!(std::fs::read(dir.join(&quarantined[0])).unwrap(), b"[not json");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

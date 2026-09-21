@@ -41,13 +41,8 @@ impl PrefsStore {
     }
 
     fn quarantine_corrupt(&self) {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
-        let name = self.path.file_name().unwrap_or_default().to_string_lossy();
-        let target = self.path.with_file_name(format!("{name}.corrupt.{stamp}"));
-        match std::fs::rename(&self.path, &target) {
-            Ok(()) => eprintln!("br0x: corrupt prefs moved to {}", target.display()),
+        match json_file::quarantine_corrupt(&self.path) {
+            Ok(target) => eprintln!("br0x: corrupt prefs moved to {}", target.display()),
             Err(e) => eprintln!("br0x: could not move corrupt prefs: {e}"),
         }
     }

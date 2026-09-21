@@ -86,4 +86,20 @@ mod tests {
         b.note_blocked();
         assert_eq!(b.count(), 1);
     }
+
+    #[test]
+    fn unreadable_blob_keeps_old_rules() {
+        let mut b = Blocker::new();
+        b.update_rules(b"ads.example\n").unwrap();
+        assert!(b.update_rules(&[0xff, 0xfe]).is_err());
+        assert!(b.should_block("https://ads.example/x.js", LoadKind::Subresource));
+    }
+
+    #[test]
+    fn empty_blob_clears_rules() {
+        let mut b = Blocker::new();
+        b.update_rules(b"ads.example\n").unwrap();
+        assert_eq!(b.update_rules(b"\n  \n").unwrap(), 0);
+        assert!(!b.should_block("https://ads.example/x.js", LoadKind::Subresource));
+    }
 }

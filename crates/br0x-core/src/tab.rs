@@ -24,7 +24,8 @@ pub enum Action {
     Park,
 }
 
-/// User visible reason that blocks freeze or park.
+/// User visible reason that blocks park. Only audible and capturing tabs
+/// also block freeze.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Exemption {
     Audible,

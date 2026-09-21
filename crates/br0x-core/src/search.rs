@@ -81,18 +81,24 @@ pub fn encode_query(input: &str) -> String {
 pub fn resolve(input: &str, engine: SearchEngine) -> String {
     let t = input.trim();
     let lower = t.to_lowercase();
+    // Spaces are illegal in a URI; the search branch escapes them via the
+    // query encoder.
+    let escaped = t.replace(' ', "%20");
     if lower.contains("://") || lower.starts_with("about:") {
-        t.replace(' ', "%20")
-    } else if lower == "localhost"
-        || lower.starts_with("localhost:")
-        || lower.starts_with("localhost/")
-    {
-        format!("http://{t}")
+        escaped
+    } else if is_loopback(&lower) {
+        format!("http://{escaped}")
     } else if t.contains(' ') || !t.contains('.') {
         engine.query_url(t)
     } else {
-        format!("https://{t}")
+        format!("https://{escaped}")
     }
+}
+
+/// `localhost` as the host part, with an optional port, path or trailing dot.
+fn is_loopback(lower: &str) -> bool {
+    let host = lower.split([':', '/', '?', '#']).next().unwrap_or_default();
+    host == "localhost" || host == "localhost."
 }
 
 #[cfg(test)]
@@ -174,6 +180,26 @@ mod tests {
     #[test]
     fn localhost_gains_http() {
         assert_eq!(resolve("localhost:8080", SearchEngine::Bing), "http://localhost:8080");
+    }
+
+    #[test]
+    fn localhost_with_trailing_dot_gains_http() {
+        assert_eq!(resolve("localhost.", SearchEngine::Bing), "http://localhost.");
+        assert_eq!(resolve("localhost.:3000/x", SearchEngine::Bing), "http://localhost.:3000/x");
+    }
+
+    #[test]
+    fn localhost_path_spaces_are_escaped() {
+        assert_eq!(
+            resolve("localhost:3000/my file.html", SearchEngine::Bing),
+            "http://localhost:3000/my%20file.html"
+        );
+    }
+
+    #[test]
+    fn ip_hosts_keep_the_https_default() {
+        assert_eq!(resolve("192.168.0.1", SearchEngine::Bing), "https://192.168.0.1");
+        assert_eq!(resolve("127.0.0.1:8000", SearchEngine::Bing), "https://127.0.0.1:8000");
     }
 
     #[test]

@@ -190,4 +190,41 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert!(out.iter().all(|(_, a)| *a != Action::Keep));
     }
+
+    #[test]
+    fn sweep_of_no_tabs_is_empty() {
+        let busy = SysState { tab_count: 0, mem_used_percent: 99.0 };
+        assert!(sweep(&[], &busy).is_empty());
+    }
+
+    #[test]
+    fn single_tab_uses_the_smallest_bucket() {
+        let one = SysState { tab_count: 1, mem_used_percent: 40.0 };
+        assert_eq!(decide(&snap(299), &one), Action::Keep);
+        assert_eq!(decide(&snap(300), &one), Action::Freeze);
+        assert_eq!(decide(&snap(899), &one), Action::Freeze);
+        assert_eq!(decide(&snap(900), &one), Action::Park);
+    }
+
+    #[test]
+    fn all_exemptions_block_park_but_not_freeze() {
+        let mut t = snap(100_000);
+        t.downloading = true;
+        t.form_dirty = true;
+        t.pinned = true;
+        t.keep_alive = true;
+        t.restored_secs_ago = Some(1);
+        assert_eq!(list_exemptions(&t).len(), 5);
+        assert_eq!(decide(&t, &sys()), Action::Freeze);
+        let busy = SysState { tab_count: 1, mem_used_percent: 99.0 };
+        assert_eq!(decide(&t, &busy), Action::Freeze);
+    }
+
+    #[test]
+    fn audible_tab_is_kept_under_pressure() {
+        let mut t = snap(100_000);
+        t.audible = true;
+        let busy = SysState { tab_count: 9, mem_used_percent: 99.0 };
+        assert_eq!(decide(&t, &busy), Action::Keep);
+    }
 }

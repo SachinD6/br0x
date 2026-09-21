@@ -84,4 +84,14 @@ mod tests {
         let lc = Lifecycle::new();
         assert_eq!(lc.state(TabId(99)), TabState::Standby);
     }
+
+    #[test]
+    fn transitions_ignore_unknown_tabs() {
+        let mut lc = Lifecycle::new();
+        let id = TabId(42);
+        lc.freeze(id);
+        lc.park(id);
+        lc.restore(id);
+        assert_eq!(lc.state(id), TabState::Standby);
+    }
 }

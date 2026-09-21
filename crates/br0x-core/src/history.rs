@@ -43,13 +43,21 @@ impl History {
              CREATE INDEX IF NOT EXISTS visits_url ON visits(url);",
         )?;
         // Existing databases lack the count column; ignore the error when it
-        // already exists.
-        let _ = conn
-            .execute("ALTER TABLE visits ADD COLUMN visit_count INTEGER NOT NULL DEFAULT 1", []);
+        // already exists. A successful ALTER means the rows predate visit
+        // counting and may repeat a URL, so collapse them once.
+        let migrated = conn
+            .execute("ALTER TABLE visits ADD COLUMN visit_count INTEGER NOT NULL DEFAULT 1", [])
+            .is_ok();
+        if migrated {
+            collapse_legacy_duplicates(&conn);
+        }
         let _ = conn.execute(
             "CREATE INDEX IF NOT EXISTS visits_count ON visits(visit_count DESC, visited_at DESC)",
             [],
         );
+        // Cheap disks and sudden power loss must never corrupt history:
+        // NORMAL under WAL only risks losing the last commits.
+        let _ = conn.execute("PRAGMA synchronous=NORMAL", []);
         Ok(Self { conn })
     }
 
@@ -98,7 +106,10 @@ impl History {
     /// never surface here. Over-fetches then filters, since result
     /// detection needs per-engine matching SQLite cannot do.
     pub fn top(&self, limit: usize) -> rusqlite::Result<Vec<Visit>> {
-        let fetch = (limit * 6).max(limit + 10);
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let fetch = limit.saturating_mul(6).max(limit.saturating_add(10));
         let mut stmt = self.conn.prepare(
             "SELECT url, title, visited_at FROM visits
              WHERE url NOT LIKE 'br0x://%' AND url != 'about:blank' AND url NOT LIKE 'file://%'
@@ -107,7 +118,9 @@ impl History {
         let rows = stmt.query_map(params![fetch as i64], |row| {
             Ok(Visit { url: row.get(0)?, title: row.get(1)?, visited_at: row.get(2)? })
         })?;
-        let mut out = Vec::with_capacity(limit);
+        // No capacity hint: `limit` is caller supplied and may be absurd,
+        // while the result is capped by the rows the query returns.
+        let mut out = Vec::new();
         for visit in rows.flatten() {
             if !is_search_results_url(&visit.url) {
                 out.push(visit);
@@ -123,6 +136,21 @@ impl History {
         self.conn.execute("DELETE FROM visits", [])?;
         Ok(())
     }
+
+    /// Total stored visits, for honest "latest N of M" labels.
+    pub fn count(&self) -> rusqlite::Result<i64> {
+        self.conn.query_row("SELECT COUNT(*) FROM visits", [], |row| row.get(0))
+    }
+}
+
+/// Older versions stored one row per visit. Collapse them to one row per URL,
+/// counting the visits, so reads stop repeating a URL.
+fn collapse_legacy_duplicates(conn: &Connection) {
+    let _ = conn.execute_batch(
+        "UPDATE visits SET visit_count = (SELECT COUNT(*) FROM visits v WHERE v.url = visits.url)
+             WHERE id IN (SELECT MAX(id) FROM visits GROUP BY url);
+         DELETE FROM visits WHERE id NOT IN (SELECT MAX(id) FROM visits GROUP BY url);",
+    );
 }
 
 /// Wrap the needle in `%` and escape LIKE wildcards so they match literally.
@@ -186,6 +214,15 @@ mod tests {
     }
 
     #[test]
+    fn counts_rows() {
+        let h = History::open_in_memory().unwrap();
+        assert_eq!(h.count().unwrap(), 0);
+        h.record("https://a.example", "A", 1).unwrap();
+        h.record("https://a.example", "A", 2).unwrap();
+        assert_eq!(h.count().unwrap(), 1);
+    }
+
+    #[test]
     fn clears() {
         let h = History::open_in_memory().unwrap();
         h.record("https://a.example", "A", 1).unwrap();
@@ -226,5 +263,60 @@ mod tests {
         let top = h.top(10).unwrap();
         assert_eq!(top.len(), 1);
         assert_eq!(top[0].url, "https://real.example");
+    }
+
+    #[test]
+    fn top_of_zero_returns_nothing() {
+        let h = History::open_in_memory().unwrap();
+        h.record("https://a.example", "A", 1).unwrap();
+        assert!(h.top(0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn top_with_huge_limit_does_not_overflow() {
+        let h = History::open_in_memory().unwrap();
+        h.record("https://a.example", "A", 1).unwrap();
+        assert_eq!(h.top(usize::MAX).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn legacy_duplicate_rows_collapse_on_open() {
+        let dir = std::env::temp_dir().join("br0x-test-history-legacy");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("history.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE visits (
+                     id INTEGER PRIMARY KEY,
+                     url TEXT NOT NULL,
+                     title TEXT NOT NULL,
+                     visited_at INTEGER NOT NULL
+                 );
+                 INSERT INTO visits (url, title, visited_at) VALUES ('https://old.example', 'Old', 5);
+                 INSERT INTO visits (url, title, visited_at) VALUES ('https://old.example', 'Older', 3);
+                 INSERT INTO visits (url, title, visited_at) VALUES ('https://old.example', 'Newest', 7);
+                 INSERT INTO visits (url, title, visited_at) VALUES ('https://once.example', 'Once', 9);",
+            )
+            .unwrap();
+        }
+        let h = History::open(&path).unwrap();
+        let recent = h.recent(10).unwrap();
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent.iter().filter(|v| v.url == "https://old.example").count(), 1);
+        let counted: i64 = Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT visit_count FROM visits WHERE url = 'https://old.example'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(counted, 3);
+        // The three legacy rows count as three visits, so the URL outranks a
+        // single visit.
+        assert_eq!(h.top(10).unwrap()[0].url, "https://old.example");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

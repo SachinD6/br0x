@@ -164,8 +164,24 @@ fn newtab_path() -> String {
     data_file("newtab.html")
 }
 
+/// file:// URL with the path percent-encoded: a space or non-ASCII word
+/// in $HOME must not break start-page identity checks elsewhere.
+fn file_url(path: &str) -> String {
+    let mut encoded = String::with_capacity(path.len() + 7);
+    for byte in path.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                encoded.push(byte as char);
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    format!("file://{encoded}")
+}
+
 fn newtab_url() -> String {
-    format!("file://{}", newtab_path())
+    static CACHED: OnceLock<String> = OnceLock::new();
+    CACHED.get_or_init(|| file_url(&newtab_path())).clone()
 }
 
 fn history_path() -> String {
@@ -245,8 +261,11 @@ fn history_time(visited_at: i64) -> String {
 
 fn history_row(url: &str, title: &str, domain: &str, time: &str) -> String {
     let letter = avatar_letter(domain);
+    // Pre-lowered haystack: the live filter reads the attribute instead of
+    // re-lowercasing the row text on every keystroke.
+    let haystack = format!("{title} {domain} {time}").to_lowercase();
     format!(
-        r#"<tr class="history-row">
+        r#"<tr class="history-row" data-search="{haystack}">
             <td class="col-avatar">{fav}</td>
             <td class="col-main">
                 <a class="entry-title" href="{url}">{title}</a>
@@ -257,6 +276,7 @@ fn history_row(url: &str, title: &str, domain: &str, time: &str) -> String {
         url = html_escape(url),
         title = html_escape(title),
         domain = html_escape(domain),
+        haystack = html_escape(&haystack),
         fav = favicon_img(domain, &letter),
         time = html_escape(time),
     )
@@ -273,14 +293,17 @@ fn history_html(history: &History, query: Option<&str>, clear: bool) -> String {
     };
     let today_day = glib::DateTime::now_local().map(|d| (d.to_unix() / 86_400) as i32).unwrap_or(0);
     let mut sections: Vec<(String, String)> = Vec::new();
-    let mut last_section = String::new();
+    let mut last_day = i32::MIN;
     for v in &visits {
-        let section = history_day_label(v.visited_at, today_day);
+        // Cheap integer grouping; the formatted label is built only when a
+        // new day section actually starts.
+        let day = (v.visited_at / 86_400) as i32;
         let domain = display_domain(&v.url).to_string();
         let title = if v.title.is_empty() { v.url.clone() } else { v.title.clone() };
         let row = history_row(&v.url, &title, &domain, &history_time(v.visited_at));
-        if section != last_section {
-            if !last_section.is_empty()
+        if day != last_day {
+            let section = history_day_label(v.visited_at, today_day);
+            if last_day != i32::MIN
                 && let Some((_, body)) = sections.last_mut()
             {
                 body.push_str("</tbody></table>");
@@ -289,7 +312,7 @@ fn history_html(history: &History, query: Option<&str>, clear: bool) -> String {
                 section.clone(),
                 format!("<h2 class=\"day\">{section}</h2><table><tbody>{row}"),
             ));
-            last_section = section;
+            last_day = day;
         } else if let Some((_, body)) = sections.last_mut() {
             body.push_str(&row);
         }
@@ -302,6 +325,12 @@ fn history_html(history: &History, query: Option<&str>, clear: bool) -> String {
         .map(|(_, body)| format!("<section class=\"day-group\">{body}</section>"))
         .collect();
     let q = query.unwrap_or_default();
+    let total = history.count().unwrap_or(visits.len() as i64) as usize;
+    let count_label = if total > visits.len() {
+        format!("latest {} of {total} entries", visits.len())
+    } else {
+        format!("{} entries", visits.len())
+    };
     let empty_state = if visits.is_empty() {
         r#"<div class="empty-notice">
           <p class="empty-title">No history yet</p>
@@ -401,7 +430,7 @@ fn history_html(history: &History, query: Option<&str>, clear: bool) -> String {
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.6px;
-      color: light-dark(#8a8f9c, #8e8e8e);
+      color: light-dark(#5f6672, #9e9e9e);
       margin: 26px 0 6px;
     }}
     table {{
@@ -507,7 +536,7 @@ fn history_html(history: &History, query: Option<&str>, clear: bool) -> String {
     <div class="header-panel">
       <div class="title-group">
         <h1>History</h1>
-        <span class="count">{count} entries</span>
+        <span class="count">{count_label}</span>
       </div>
       <div class="actions">
         <a class="btn-clear" href="br0x://history?clear=1" onclick="return confirm('Clear entire local browsing history?');">Clear…</a>
@@ -537,7 +566,7 @@ fn history_html(history: &History, query: Option<&str>, clear: bool) -> String {
         const rows = root.querySelectorAll('.history-row');
         let visibleCount = 0;
         rows.forEach(row => {{
-          const text = row.textContent.toLowerCase();
+          const text = row.dataset.search || row.textContent.toLowerCase();
           const match = q === '' || text.includes(q);
           row.style.display = match ? '' : 'none';
           if (match) visibleCount++;
@@ -553,11 +582,19 @@ fn history_html(history: &History, query: Option<&str>, clear: bool) -> String {
       }});
     }}
   </script>
+  {clear_script}
 </body>
 </html>"#,
-        count = visits.len(),
+        count_label = count_label,
         q = html_escape(q),
         empty_state = empty_state,
+        // After a wipe the tab URL still carries ?clear=1, which would wipe
+        // again on reload or Back. Drop the query so the URL is disarmed.
+        clear_script = if clear {
+            "<script>history.replaceState({}, '', 'br0x://history');</script>"
+        } else {
+            ""
+        },
     )
 }
 
@@ -650,6 +687,33 @@ fn register_br0x_scheme(context: &webkit6::WebContext, history: Rc<RefCell<Optio
     });
 }
 
+/// Last path component of a server-suggested file name. `None` for names
+/// that are empty or have no component (".", "..", "a/..").
+fn safe_file_name(suggested: &str) -> Option<&str> {
+    std::path::Path::new(suggested)
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .and_then(|name| name.to_str())
+}
+
+/// First free name in the download folder: `photo.jpg`, `photo (1).jpg`, …
+/// WebKit picks a free name for its own destination, but a destination set
+/// by hand is used as is and fails on an existing file, since overwriting
+/// is off.
+fn free_file_name(name: &str, taken: impl Fn(&str) -> bool) -> String {
+    if !taken(name) {
+        return name.to_owned();
+    }
+    let (stem, extension) = match name.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() => (stem, format!(".{extension}")),
+        _ => (name, String::new()),
+    };
+    (1..1000)
+        .map(|n| format!("{stem} ({n}){extension}"))
+        .find(|candidate| !taken(candidate))
+        .unwrap_or_else(|| name.to_owned())
+}
+
 /// Save downloads to the Downloads directory and tell the user with a toast.
 fn connect_downloads(session: &webkit6::NetworkSession, toasts: &adw::ToastOverlay) {
     let toasts = toasts.clone();
@@ -668,13 +732,12 @@ fn connect_downloads(session: &webkit6::NetworkSession, toasts: &adw::ToastOverl
         download.connect_decide_destination(move |d, suggested| {
             // Keep only the last path component: a suggested "../../.bashrc"
             // must not escape the Downloads directory.
-            let Some(name) =
-                std::path::Path::new(suggested).file_name().filter(|name| !name.is_empty())
-            else {
+            let Some(name) = safe_file_name(suggested) else {
                 toasts_bad.add_toast(adw::Toast::new("Download failed: unsafe file name"));
                 return false;
             };
-            match dir.join(name).to_str() {
+            let name = free_file_name(name, |candidate| dir.join(candidate).exists());
+            match dir.join(&name).to_str() {
                 Some(dest) => {
                     d.set_destination(dest);
                     true
@@ -726,10 +789,14 @@ fn site_card(url: &str, name: &str, key: Option<&str>, class: &str) -> String {
     let domain = display_domain(url);
     let letter = avatar_letter(name);
     let key_attr = key.map(|k| format!(" data-key=\"{}\"", html_escape(k))).unwrap_or_default();
+    let key_badge = key
+        .map(|k| format!("<kbd class=\"key-badge\">{}</kbd>", html_escape(k)))
+        .unwrap_or_default();
     format!(
         r#"<a class="card {class}" href="{url}" title="{url}"{key_attr}>
             {fav}
             <span class="card-text"><span class="card-name">{name}</span><span class="card-domain">{domain}</span></span>
+            {key_badge}
         </a>"#,
         class = html_escape(class),
         url = html_escape(url),
@@ -737,6 +804,7 @@ fn site_card(url: &str, name: &str, key: Option<&str>, class: &str) -> String {
         fav = favicon_img(domain, &letter),
         name = html_escape(name),
         domain = html_escape(domain),
+        key_badge = key_badge,
     )
 }
 /// Human name for a frequent URL. Raw URLs and URL-looking titles fall
@@ -878,7 +946,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], bookmarks: &[Bookmark])
       margin: 6px 0 0;
     }}
     .date-line {{
-      color: light-dark(#8a8f9c, #8e8e8e);
+      color: light-dark(#5f6672, #9e9e9e);
       font-size: 13px;
       margin: 4px 0 0;
     }}
@@ -967,7 +1035,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], bookmarks: &[Bookmark])
     }}
     .section-count {{
       font-weight: 600;
-      color: light-dark(#a0a5b1, #6e6e6e);
+      color: light-dark(#5f6672, #9e9e9e);
     }}
     .hint-card {{
       width: 100%;
@@ -1037,10 +1105,20 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], bookmarks: &[Bookmark])
     }}
     .card-domain {{
       font-size: 11px;
-      color: light-dark(#8a8f9c, #8e8e8e);
+      color: light-dark(#5f6672, #9e9e9e);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }}
+    .key-badge {{
+      margin-left: auto;
+      flex: none;
+      font-size: 11px;
+      font-weight: 600;
+      color: light-dark(#8a8f9c, #8e8e8e);
+      border: 1px solid light-dark(#e2e5ec, #3d3d3d);
+      border-radius: 6px;
+      padding: 1px 6px;
     }}
     .pin {{
       position: relative;
@@ -1099,7 +1177,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], bookmarks: &[Bookmark])
       text-decoration: underline;
     }}
     .hint {{
-      color: light-dark(#b0b0b0, #666);
+      color: light-dark(#5f6672, #9e9e9e);
     }}
     .modal-backdrop {{
       position: fixed;
@@ -1177,7 +1255,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], bookmarks: &[Bookmark])
     .btn-primary {{
       border: 0;
       background: light-dark(#2f6fed, #7aa6ff);
-      color: white;
+      color: light-dark(#ffffff, #0b1b33);
     }}
     .btn-ghost {{
       border: 1px solid light-dark(#e2e5ec, #3d3d3d);
@@ -1196,7 +1274,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], bookmarks: &[Bookmark])
     <form action="{action}" method="get">
       <div class="search-wrap">
         <svg class="search-icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="11" y1="11" x2="14.5" y2="14.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-        <input class="search-field" id="search-input" name="{param}" placeholder="Search {engine_name} or enter address" autofocus autocomplete="off" spellcheck="false">
+        <input class="search-field" id="search-input" name="{param}" placeholder="Search {engine_name} or enter address" autocomplete="off" spellcheck="false">
         <span class="engine-badge">{engine_name}</span>
       </div>
     </form>
@@ -1381,9 +1459,11 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], bookmarks: &[Bookmark])
     }})();
     document.addEventListener('keydown', function(e) {{
       var active = document.activeElement;
-      if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {{
+      var typing = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
+      if (typing) {{
         if (e.key === 'Escape') active.blur();
-        return;
+        // Number shortcuts still work while the search box is empty.
+        if (active.value !== '' || !/^[1-6]$/.test(e.key)) return;
       }}
       if (e.key === '/') {{
         e.preventDefault();
@@ -1473,14 +1553,23 @@ fn ensure_filter(tabs: Rc<RefCell<Tabs>>) {
     let store = filter_store();
     let json = glib::Bytes::from_owned(BASE_FILTER_JSON.as_bytes().to_vec());
     glib::spawn_future_local(async move {
-        match store.save_future("br0x-base", &json).await {
-            Ok(filter) => {
-                let _ = FILTER_CACHE.set(CachedFilter(filter));
-                for entry in tabs.borrow().entries.iter() {
-                    attach_filter(&entry.view);
+        // The compiled list survives restarts: load it instead of paying
+        // for a recompile (and disk write) on every launch.
+        let compiled = match store.load_future("br0x-base").await {
+            Ok(filter) => Some(filter),
+            Err(_) => match store.save_future("br0x-base", &json).await {
+                Ok(filter) => Some(filter),
+                Err(e) => {
+                    eprintln!("br0x: filter compile failed: {e}");
+                    None
                 }
+            },
+        };
+        if let Some(filter) = compiled {
+            let _ = FILTER_CACHE.set(CachedFilter(filter));
+            for entry in tabs.borrow().entries.iter() {
+                attach_filter(&entry.view);
             }
-            Err(e) => eprintln!("br0x: filter compile failed: {e}"),
         }
     });
 }
@@ -1541,19 +1630,17 @@ const SUGGESTION_MIN_CHARS: usize = 2;
 /// Most suggestions shown at once.
 const SUGGESTION_LIMIT: usize = 8;
 
-/// Rebuild the suggestion rows for `needle`. Always ends with an engine
-/// row, so true means the popover has something to show. `urls` stays
-/// parallel to the history rows: index == urls.len() is the engine row.
-fn fill_suggestions(
+/// Rebuild the suggestion rows for pre-fetched `visits`. Always ends with
+/// an engine row, so true means the popover has something to show. `urls`
+/// stays parallel to the history rows: index == urls.len() is the engine row.
+fn render_suggestions(
+    visits: &[Visit],
     needle: &str,
-    history: &Rc<RefCell<Option<History>>>,
     list: &gtk4::ListBox,
     urls: &Rc<RefCell<Vec<String>>>,
     engine: SearchEngine,
 ) -> bool {
     list.remove_all();
-    let found = history.borrow().as_ref().and_then(|h| h.search(needle, SUGGESTION_LIMIT).ok());
-    let visits = found.unwrap_or_default();
     let mut store = urls.borrow_mut();
     store.clear();
     for visit in visits {
@@ -1581,7 +1668,7 @@ fn fill_suggestions(
         let row = gtk4::ListBoxRow::new();
         row.set_child(Some(&stack));
         list.append(&row);
-        store.push(visit.url);
+        store.push(visit.url.clone());
     }
     // Trailing engine row runs the typed text as a search.
     let line = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
@@ -1602,6 +1689,36 @@ fn fill_suggestions(
     true
 }
 
+/// Resolve a suggestion row to a URL. Index == urls.len() is the trailing
+/// engine row, which searches the typed text like Enter does.
+fn suggestion_target(
+    urls: &[String],
+    index: Option<usize>,
+    query: &str,
+    engine: SearchEngine,
+) -> Option<String> {
+    match index {
+        Some(i) if i < urls.len() => urls.get(i).cloned(),
+        Some(i) if i == urls.len() => {
+            if query.trim().is_empty() {
+                None
+            } else {
+                Some(search::resolve(query, engine))
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Row count of the suggestion list (always small: history hits plus the
+/// engine row).
+fn suggest_row_count(list: &gtk4::ListBox) -> usize {
+    let mut count = 0;
+    while list.row_at_index(count).is_some() {
+        count += 1;
+    }
+    count as usize
+}
 /// Whether the keyboard sits in the entry rather than in the page or in the
 /// suggestion list. GTK focuses the entry's inner text widget, so the entry
 /// itself is never the focus widget.
@@ -1648,7 +1765,7 @@ h1 {{ font-size: 20px; margin: 0 0 8px; }}
 p {{ color: light-dark(#616161, #9e9e9e); font-size: 14px; margin: 0 0 6px; }}
 .url {{ font-size: 12px; word-break: break-all; }}
 button {{ margin-top: 18px; padding: 10px 22px; border-radius: 9999px; border: 0;
-  background: light-dark(#2f6fed, #7aa6ff); color: white; font: inherit; cursor: pointer; }}
+  background: light-dark(#2f6fed, #7aa6ff); color: light-dark(#ffffff, #0b1b33); font: inherit; cursor: pointer; }}
 </style></head>
 <body><div class="card"><div class="icon">○</div><h1>{heading}</h1><p>{message}</p>
 <p class="url">{uri}</p><button onclick="location.reload()">Reload</button></div></body></html>"#,
@@ -1688,6 +1805,31 @@ fn window_title_for(tab_view: &adw::TabView) -> String {
 
 const MAX_CLOSED_TABS: usize = 10;
 
+/// What one find request should do. `active` is the text the selected tab's
+/// controller is searching for right now.
+#[derive(Debug, PartialEq, Eq)]
+enum FindStep {
+    Start,
+    Next,
+    Previous,
+    Clear,
+}
+
+/// Decide the step for `query`. A query the controller is not searching yet
+/// must start a search: next and previous before a search are a WebKit
+/// programming error, so after a tab switch they would do nothing.
+fn find_step(query: &str, active: &str, forward: bool, fresh: bool) -> FindStep {
+    if query.trim().is_empty() {
+        FindStep::Clear
+    } else if fresh || active != query {
+        FindStep::Start
+    } else if forward {
+        FindStep::Next
+    } else {
+        FindStep::Previous
+    }
+}
+
 struct Shell {
     tab_view: adw::TabView,
     entry: gtk4::Entry,
@@ -1703,6 +1845,8 @@ struct Shell {
     find_status: gtk4::Label,
     toasts: adw::ToastOverlay,
     zoom_toast: RefCell<Option<adw::Toast>>,
+    last_session: RefCell<Vec<StoredTab>>,
+    last_sample: RefCell<Option<(Instant, br0x_core::tab::SysState)>>,
     suggest_pop: gtk4::Popover,
     history: Rc<RefCell<Option<History>>>,
     bookmarks: Rc<RefCell<Vec<Bookmark>>>,
@@ -1784,24 +1928,25 @@ impl Shell {
     }
 
     fn find_in_page(&self, query: &str, forward: bool, fresh: bool) {
-        // An empty query would highlight every node in the page.
-        if query.trim().is_empty() {
-            return;
-        }
         let Some(view) = selected_view(&self.tab_view) else {
             return;
         };
         let Some(controller) = view.find_controller() else {
             return;
         };
-        if fresh {
-            let options =
-                (webkit6::FindOptions::CASE_INSENSITIVE | webkit6::FindOptions::WRAP_AROUND).bits();
-            controller.search(query, options, u32::MAX);
-        } else if forward {
-            controller.search_next();
-        } else {
-            controller.search_previous();
+        let active = controller.text().map(|text| text.to_string()).unwrap_or_default();
+        match find_step(query, &active, forward, fresh) {
+            // An empty query would highlight every node in the page, so it
+            // finishes the search instead: that is what drops the highlights.
+            FindStep::Clear => controller.search_finish(),
+            FindStep::Start => {
+                let options = (webkit6::FindOptions::CASE_INSENSITIVE
+                    | webkit6::FindOptions::WRAP_AROUND)
+                    .bits();
+                controller.search(query, options, u32::MAX);
+            }
+            FindStep::Next => controller.search_next(),
+            FindStep::Previous => controller.search_previous(),
         }
     }
 
@@ -2094,16 +2239,12 @@ impl Shell {
         view.add_controller(page_click);
 
         // target=_blank and window.open land here. Returning the new view
-        // makes WebKit load the request into it. Without a handler they
-        // would spawn invisible views outside the tab strip.
+        // makes WebKit load the request into it, form submission and all;
+        // loading the URI here as well would navigate the tab twice.
         let shell_weak = Rc::downgrade(self);
-        view.connect_create(move |source, action| {
+        view.connect_create(move |source, _| {
             let shell = shell_weak.upgrade()?;
-            let uri = action.request().and_then(|r| r.uri());
             let (new_view, _) = shell.create_tab(Some(source), true);
-            if let Some(url) = uri {
-                new_view.load_uri(&url);
-            }
             Some(new_view.upcast())
         });
     }
@@ -2125,6 +2266,8 @@ impl Shell {
                     None
                 };
                 entry.view.set_is_muted(false);
+                entry.page.set_indicator_icon(None::<&gio::ThemedIcon>);
+                entry.page.set_indicator_tooltip("");
                 Some((entry.view.clone(), url))
             })
         };
@@ -2152,7 +2295,19 @@ impl Shell {
 
     /// 5s tick: sample pressure, ask core, freeze or park background tabs.
     fn enforce_tick(&self) {
-        let sys = br0x_core::sampler::sample(self.tab_view.n_pages() as usize);
+        // /proc reads every tick add up: reuse a sample younger than 15 s.
+        let tabs = self.tab_view.n_pages() as usize;
+        let sys = match &mut *self.last_sample.borrow_mut() {
+            Some((at, sys)) if at.elapsed().as_secs() < 15 => {
+                sys.tab_count = tabs;
+                *sys
+            }
+            slot => {
+                let sys = br0x_core::sampler::sample(tabs);
+                *slot = Some((Instant::now(), sys));
+                sys
+            }
+        };
         let selected = self.tab_view.selected_page();
         // Decide under the borrow, kill processes after it: terminating a
         // process re-enters the shell through signals.
@@ -2172,7 +2327,14 @@ impl Shell {
                     Action::Keep => {}
                     Action::Freeze => {
                         // Mute frozen background tabs; selection unmutes.
+                        // The speaker badge explains the silence.
                         entry.view.set_is_muted(true);
+                        entry.page.set_indicator_icon(Some(&gio::ThemedIcon::new(
+                            "audio-volume-muted-symbolic",
+                        )));
+                        entry.page.set_indicator_tooltip(
+                            "Muted while this tab is frozen — open it to resume",
+                        );
                     }
                     Action::Park => {
                         if let Some(view) = park_entry(entry) {
@@ -2211,6 +2373,12 @@ impl Shell {
             // Start pages and internal pages are not worth restoring.
             .filter(|t| !t.url.is_empty() && !is_blank_uri(&t.url) && !t.url.starts_with("br0x://"))
             .collect();
+        // The timer fires every 30 s whether or not anything changed: skip
+        // the write (and its two fsyncs) when the tab set is identical.
+        if stored == *self.last_session.borrow() {
+            return;
+        }
+        *self.last_session.borrow_mut() = stored.clone();
         let store = SessionStore::new(session_path());
         if let Err(e) = store.save(&Session { tabs: stored }) {
             eprintln!("br0x: session save failed: {e}");
@@ -2226,12 +2394,16 @@ impl Shell {
         };
         session.tabs.retain(|t| !t.url.is_empty());
         session.tabs.sort_by_key(|t| t.order);
+        // A parked tab sits on about:blank, so its URL has to come from
+        // pending_url as well: otherwise a restore would add a second copy
+        // of every parked tab.
         let mut open: HashSet<String> = self
             .tabs
             .borrow()
             .entries
             .iter()
-            .filter_map(|e| e.view.uri().map(|uri| uri.to_string()))
+            .flat_map(|e| [e.view.uri().map(|uri| uri.to_string()), e.meta.pending_url.clone()])
+            .flatten()
             .filter(|uri| !is_blank_uri(uri))
             .collect();
         let window_empty = self.tab_view.n_pages() == 0;
@@ -2574,6 +2746,7 @@ fn install_theme() {
             border-radius: 20px;
             padding: 2px 8px 2px 6px;
             min-height: 40px;
+            min-width: 220px;
             background-color: var(--view-bg-color);
             border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
             box-shadow: 0 1px 2px color-mix(in srgb, currentColor 6%, transparent);
@@ -2673,6 +2846,8 @@ fn build_ui(app: &adw::Application) {
     let tab_bar = adw::TabBar::new();
     tab_bar.set_view(Some(&tab_view));
     tab_bar.set_hexpand(true);
+    // Tabs hug their content instead of stretching across the window.
+    tab_bar.set_expand_tabs(false);
     tab_bar.set_autohide(false);
 
     let back = gtk4::Button::from_icon_name("go-previous-symbolic");
@@ -2690,7 +2865,7 @@ fn build_ui(app: &adw::Application) {
     engine_btn.set_label(prefs.engine.name());
     engine_btn.add_css_class("flat");
     engine_btn.set_always_show_arrow(true);
-    engine_btn.set_tooltip_text(Some("Choose search engine (applies to new tabs)"));
+    engine_btn.set_tooltip_text(Some("Choose search engine (address bar and start page)"));
     {
         let engine_menu = gio::Menu::new();
         for (idx, engine) in SearchEngine::ALL.iter().enumerate() {
@@ -2710,6 +2885,7 @@ fn build_ui(app: &adw::Application) {
     entry.add_css_class("flat");
     entry.set_icon_from_icon_name(gtk4::EntryIconPosition::Secondary, None);
     entry.set_icon_tooltip_text(gtk4::EntryIconPosition::Secondary, Some("Clear"));
+    entry.set_menu_entry_icon_text(gtk4::EntryIconPosition::Primary, "Connection security");
 
     // Suggestion dropdown under the address bar, refilled from history on
     // every keystroke. Deliberately NOT autohide: an autohide popover
@@ -2734,7 +2910,7 @@ fn build_ui(app: &adw::Application) {
     let omnibox_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
     omnibox_box.add_css_class("omnibox-frame");
     omnibox_box.set_hexpand(true);
-    omnibox_box.set_size_request(480, 40);
+    omnibox_box.set_size_request(-1, 40);
     omnibox_box.append(&engine_btn);
     omnibox_box.append(&entry);
     omnibox_box.append(&bookmark_btn);
@@ -2835,6 +3011,8 @@ fn build_ui(app: &adw::Application) {
         find_status,
         toasts: toasts.clone(),
         zoom_toast: RefCell::new(None),
+        last_session: RefCell::new(Vec::new()),
+        last_sample: RefCell::new(None),
         suggest_pop: suggest_popover.clone(),
         history,
         bookmarks,
@@ -2860,9 +3038,26 @@ fn build_ui(app: &adw::Application) {
             let text = e.text().to_string();
             if text.is_empty() {
                 s.find_status.set_text("");
+                s.find_in_page(&text, true, false);
                 return;
             }
             s.find_in_page(&text, true, true);
+        });
+    }
+    {
+        // Hiding the find bar drops the page highlights and the stale count;
+        // WebKit keeps both until the search is finished.
+        let s = shell.clone();
+        find_bar.connect_search_mode_enabled_notify(move |bar| {
+            if bar.is_search_mode() {
+                return;
+            }
+            if let Some(view) = selected_view(&s.tab_view)
+                && let Some(controller) = view.find_controller()
+            {
+                controller.search_finish();
+            }
+            s.find_status.set_text("");
         });
     }
     {
@@ -2888,13 +3083,24 @@ fn build_ui(app: &adw::Application) {
     }
     {
         let s = shell.clone();
+        let urls = suggest_urls.clone();
+        let popover = suggest_popover.clone();
+        let list = suggest_list.clone();
         entry.connect_activate(move |e| {
-            let url = e.text().to_string();
-            if url.trim().is_empty() {
+            let query = e.text().to_string();
+            if query.trim().is_empty() {
                 return;
             }
+            // A highlighted row wins over the raw text; otherwise Enter
+            // searches the typed text. Either way the list must not sit
+            // over the page until the load commits, or forever on failure.
+            let engine = s.prefs.borrow().engine;
+            let selected = list.selected_row().and_then(|row| usize::try_from(row.index()).ok());
+            let target = suggestion_target(&urls.borrow(), selected, &query, engine)
+                .unwrap_or_else(|| search::resolve(&query, engine));
+            popover.popdown();
             if let Some(v) = selected_view(&s.tab_view) {
-                v.load_uri(&search::resolve(&url, s.prefs.borrow().engine));
+                v.load_uri(&target);
                 v.grab_focus();
             }
         });
@@ -2952,7 +3158,23 @@ fn build_ui(app: &adw::Application) {
             }
             // No focus games here: without autohide the popup never takes
             // the keyboard, so typing keeps flowing into the entry.
-            if fill_suggestions(needle, &history, &list, &urls, s.prefs.borrow().engine) {
+            // Widget rebuilds cost more than the query: when the result
+            // URLs match the rows already shown, leave them alone.
+            let visits = history
+                .borrow()
+                .as_ref()
+                .and_then(|h| h.search(needle, SUGGESTION_LIMIT).ok())
+                .unwrap_or_default();
+            let fresh: Vec<String> = visits.iter().map(|v| v.url.clone()).collect();
+            if fresh == *urls.borrow() {
+                if !popover.is_visible() && !fresh.is_empty() {
+                    popover.popup();
+                }
+                return;
+            }
+            if render_suggestions(&visits, needle, &list, &urls, s.prefs.borrow().engine) {
+                // Line the panel up with the field it belongs to.
+                popover.set_size_request(e.width(), -1);
                 popover.popup();
             } else {
                 popover.popdown();
@@ -2965,20 +3187,8 @@ fn build_ui(app: &adw::Application) {
         let popover = suggest_popover.clone();
         suggest_list.connect_row_activated(move |_, row| {
             let index = usize::try_from(row.index()).ok();
-            let history_len = urls.borrow().len();
-            // Trailing engine row searches the typed text, like Enter.
-            let target = match index {
-                Some(i) if i < history_len => urls.borrow().get(i).cloned(),
-                Some(i) if i == history_len => {
-                    let query = s.entry.text().to_string();
-                    if query.trim().is_empty() {
-                        None
-                    } else {
-                        Some(search::resolve(&query, s.prefs.borrow().engine))
-                    }
-                }
-                _ => None,
-            };
+            let query = s.entry.text().to_string();
+            let target = suggestion_target(&urls.borrow(), index, &query, s.prefs.borrow().engine);
             popover.popdown();
             if let Some(url) = target
                 && let Some(view) = selected_view(&s.tab_view)
@@ -2989,6 +3199,8 @@ fn build_ui(app: &adw::Application) {
         });
     }
     {
+        // The caret never leaves the entry: Down/Up move the highlight,
+        // Enter picks it up (see connect_activate), typing keeps working.
         let list = suggest_list.clone();
         let popover = suggest_popover.clone();
         let keys = gtk4::EventControllerKey::new();
@@ -2996,19 +3208,32 @@ fn build_ui(app: &adw::Application) {
             if !popover.is_visible() {
                 return glib::Propagation::Proceed;
             }
-            if keyval == gtk4::gdk::Key::Down {
-                if let Some(row) = list.row_at_index(0) {
-                    row.grab_focus();
+            let step = match keyval {
+                gtk4::gdk::Key::Down => 1,
+                gtk4::gdk::Key::Up => -1,
+                gtk4::gdk::Key::Escape => {
+                    // Swallowed on purpose: Escape closes the list instead of
+                    // reaching the win.stop action that halts page loads.
+                    popover.popdown();
+                    list.unselect_all();
+                    return glib::Propagation::Stop;
                 }
-                glib::Propagation::Stop
-            } else if keyval == gtk4::gdk::Key::Escape {
-                // Swallowed on purpose: Escape closes the list instead of
-                // reaching the win.stop action that halts page loads.
-                popover.popdown();
-                glib::Propagation::Stop
+                _ => return glib::Propagation::Proceed,
+            };
+            let current = list
+                .selected_row()
+                .and_then(|row| usize::try_from(row.index()).ok())
+                .map(|i| i as isize)
+                .unwrap_or(if step > 0 { -1 } else { suggest_row_count(&list) as isize });
+            let next = current + step;
+            if next >= 0
+                && let Some(row) = list.row_at_index(next as i32)
+            {
+                list.select_row(Some(&row));
             } else {
-                glib::Propagation::Proceed
+                list.unselect_all();
             }
+            glib::Propagation::Stop
         });
         entry.add_controller(keys);
     }
@@ -3068,8 +3293,13 @@ fn build_ui(app: &adw::Application) {
             glib::Propagation::Proceed
         });
     }
+    // Set on close-request. Tab teardown detaches every page too, so the
+    // empty strip during teardown must not read as "the user closed the last
+    // tab" and open a fresh one inside a disposing tab view.
+    let closing = Rc::new(std::cell::Cell::new(false));
     {
         let s = shell.clone();
+        let closing = closing.clone();
         tab_view.connect_page_detached(move |tv, page, _| {
             {
                 let mut tabs = s.tabs.borrow_mut();
@@ -3088,7 +3318,7 @@ fn build_ui(app: &adw::Application) {
                 tabs.remove_page(page);
             }
             // Borrow released: a new tab touches the same RefCell.
-            if tv.n_pages() == 0 {
+            if tv.n_pages() == 0 && !closing.get() {
                 s.add_blank_tab();
                 s.entry.grab_focus();
             }
@@ -3097,6 +3327,7 @@ fn build_ui(app: &adw::Application) {
     {
         let s = shell.clone();
         window.connect_close_request(move |_| {
+            closing.set(true);
             s.save_session();
             glib::Propagation::Proceed
         });
@@ -3162,5 +3393,40 @@ mod tests {
         assert!(!is_blank_uri(""));
         assert!(!is_blank_uri("br0x://history"));
         assert!(!is_blank_uri("https://example.com"));
+    }
+
+    #[test]
+    fn find_starts_before_it_moves() {
+        // A tab whose controller is not searching the query yet (fresh tab,
+        // switched tab) has to start a search: next before a search is an
+        // error in WebKit and does nothing.
+        assert_eq!(find_step("rust", "", true, false), FindStep::Start);
+        assert_eq!(find_step("rust", "other", false, false), FindStep::Start);
+        assert_eq!(find_step("rust", "rust", true, false), FindStep::Next);
+        assert_eq!(find_step("rust", "rust", false, false), FindStep::Previous);
+        assert_eq!(find_step("rust", "rust", true, true), FindStep::Start);
+        // An empty query clears instead of highlighting the whole page.
+        assert_eq!(find_step("   ", "rust", true, false), FindStep::Clear);
+    }
+
+    #[test]
+    fn suggested_names_keep_only_the_last_component() {
+        assert_eq!(safe_file_name("report.pdf"), Some("report.pdf"));
+        assert_eq!(safe_file_name("/etc/passwd"), Some("passwd"));
+        assert_eq!(safe_file_name("../../.bashrc"), Some(".bashrc"));
+        assert_eq!(safe_file_name("a/b/"), Some("b"));
+        assert_eq!(safe_file_name(""), None);
+        assert_eq!(safe_file_name(".."), None);
+        assert_eq!(safe_file_name("a/.."), None);
+    }
+
+    #[test]
+    fn download_names_never_collide() {
+        let taken = ["photo.jpg", "photo (1).jpg"];
+        assert_eq!(free_file_name("photo.jpg", |name| taken.contains(&name)), "photo (2).jpg");
+        assert_eq!(free_file_name("photo.jpg", |_| false), "photo.jpg");
+        assert_eq!(free_file_name("notes", |name| name == "notes"), "notes (1)");
+        // A dotfile has no stem to split, so the counter lands at the end.
+        assert_eq!(free_file_name(".bashrc", |name| name == ".bashrc"), ".bashrc (1)");
     }
 }
