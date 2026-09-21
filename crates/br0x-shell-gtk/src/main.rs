@@ -770,14 +770,14 @@ fn connect_downloads(session: &webkit6::NetworkSession, toasts: &adw::ToastOverl
 
 /// Write the start page for the chosen engine and return its file URL.
 /// A file keeps the page offline, instant, and user editable.
-/// Always rewrites: Frequent and Bookmarks embed live data, so a cache
+/// Always rewrites: Frequent embeds live history, so a cache
 /// by engine alone would serve stale sites.
-fn write_newtab_page(engine: SearchEngine, frequent: &[Visit], bookmarks: &[Bookmark]) -> String {
+fn write_newtab_page(engine: SearchEngine, frequent: &[Visit]) -> String {
     let path = newtab_path();
     if let Some(parent) = std::path::Path::new(&path).parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if std::fs::write(&path, newtab_html(engine, frequent, bookmarks)).is_err() {
+    if std::fs::write(&path, newtab_html(engine, frequent)).is_err() {
         eprintln!("br0x: could not write {path}");
     }
     newtab_url()
@@ -836,7 +836,7 @@ const SHORTCUTS: [(&str, &str, &str); 6] = [
     ("6", "Mail", "https://mail.google.com"),
 ];
 
-fn newtab_html(engine: SearchEngine, frequent: &[Visit], bookmarks: &[Bookmark]) -> String {
+fn newtab_html(engine: SearchEngine, frequent: &[Visit]) -> String {
     let (action, param) = engine.form();
     let items: String =
         SHORTCUTS.iter().map(|(key, name, url)| site_card(url, name, Some(key), "")).collect();
@@ -853,27 +853,8 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], bookmarks: &[Bookmark])
             r#"<h2 class="section-title">Frequent <span class="section-count">· {frequent_count}</span></h2><nav class="grid" id="frequent-grid">{frequent_cards}</nav>"#
         )
     };
-    let bookmark_cards: String = bookmarks
-        .iter()
-        .map(|b| {
-            let name = if b.title.is_empty() {
-                display_domain(&b.url).to_string()
-            } else {
-                b.title.clone()
-            };
-            site_card(&b.url, &name, None, "bookmark-card")
-        })
-        .collect();
-    let bookmark_section = if bookmark_cards.is_empty() {
-        String::new()
-    } else {
-        format!(
-            r#"<h2 class="section-title">Bookmarks <span class="section-count">· {count}</span></h2><nav class="grid" id="bookmarks-grid">{bookmark_cards}</nav>"#,
-            count = bookmarks.len(),
-        )
-    };
-    let empty_hint = if frequent_cards.is_empty() && bookmark_cards.is_empty() {
-        r#"<div class="hint-card"><p class="hint-title">A fresh start</p><p class="hint-sub">Star pages with Ctrl+D — they will appear here.</p></div>"#
+    let empty_hint = if frequent_cards.is_empty() {
+        r#"<div class="hint-card"><p class="hint-title">A fresh start</p><p class="hint-sub">Sites you visit will appear here. Star pages with Ctrl+D to find them in the header menu.</p></div>"#
             .to_string()
     } else {
         String::new()
@@ -1003,23 +984,23 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], bookmarks: &[Bookmark])
     }}
     .grid {{
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 10px;
       width: 100%;
       margin-top: 12px;
     }}
     @media (max-width: 640px) {{
       .wrap {{ padding-top: 7vh; }}
-      .grid {{ grid-template-columns: repeat(3, 1fr); }}
     }}
     @media (max-width: 480px) {{
-      .grid {{ grid-template-columns: repeat(2, 1fr); }}
+      .grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
       .search-field {{ padding: 12px 84px 12px 15px; font-size: 14px; }}
     }}
     a.card {{
       display: flex;
       align-items: center;
       gap: 10px;
+      min-width: 0;
       color: inherit;
       text-decoration: none;
       background-color: light-dark(#ffffff, #262626);
@@ -1095,6 +1076,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], bookmarks: &[Bookmark])
       display: flex;
       flex-direction: column;
       min-width: 0;
+      flex: 1;
     }}
     .card-name {{
       font-size: 14px;
@@ -1278,7 +1260,6 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], bookmarks: &[Bookmark])
         <span class="engine-badge">{engine_name}</span>
       </div>
     </form>
-    {bookmark_section}
     {frequent_section}
     {empty_hint}
     <h2 class="section-title">Shortcuts <span class="section-count">· 6</span></h2>
@@ -1848,6 +1829,7 @@ struct Shell {
     last_session: RefCell<Vec<StoredTab>>,
     last_sample: RefCell<Option<(Instant, br0x_core::tab::SysState)>>,
     suggest_pop: gtk4::Popover,
+    bm_list: gtk4::ListBox,
     history: Rc<RefCell<Option<History>>>,
     bookmarks: Rc<RefCell<Vec<Bookmark>>>,
     bookmarks_store: BookmarkStore,
@@ -1899,7 +1881,7 @@ impl Shell {
     fn add_blank_tab(self: &Rc<Self>) {
         let (view, _) = self.create_tab(None, true);
         let engine = self.prefs.borrow().engine;
-        let url = write_newtab_page(engine, &self.frequent_sites(), &self.bookmarks.borrow());
+        let url = write_newtab_page(engine, &self.frequent_sites());
         view.load_uri(&url);
     }
 
@@ -1993,15 +1975,59 @@ impl Shell {
             }
             refresh_bookmark_icon(&self.bookmark_btn, &bookmarks, &uri);
         }
-        // The start page embeds bookmarks, so rewrite it and refresh any
-        // open start pages: otherwise the change stays invisible.
-        let snapshot = self.bookmarks.borrow().clone();
-        write_newtab_page(self.prefs.borrow().engine, &self.frequent_sites(), &snapshot);
-        self.reload_start_pages();
+        self.refresh_bookmarks_menu();
     }
 
-    /// Reload tabs currently showing the start page (fresh data after a
-    /// bookmark toggle or engine switch).
+    /// Rebuild the header bookmarks menu from the store. Called at startup
+    /// and after every toggle, so the menu never shows stale entries.
+    fn refresh_bookmarks_menu(&self) {
+        let bookmarks = self.bookmarks.borrow();
+        while let Some(row) = self.bm_list.row_at_index(0) {
+            self.bm_list.remove(&row);
+        }
+        if bookmarks.is_empty() {
+            let label = gtk4::Label::new(Some("No bookmarks yet — press Ctrl+D"));
+            label.add_css_class("dim-label");
+            label.set_margin_top(8);
+            label.set_margin_bottom(8);
+            label.set_margin_start(12);
+            label.set_margin_end(12);
+            // Placeholder, not a row: never selectable, never activated.
+            self.bm_list.set_placeholder(Some(&label));
+            return;
+        }
+        self.bm_list.set_placeholder(None::<&gtk4::Widget>);
+        for mark in bookmarks.iter() {
+            let name = if mark.title.is_empty() {
+                display_domain(&mark.url).to_owned()
+            } else {
+                mark.title.clone()
+            };
+            let stack = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+            stack.set_margin_top(4);
+            stack.set_margin_bottom(4);
+            let title = gtk4::Label::new(Some(&name));
+            title.set_xalign(0.0);
+            title.set_hexpand(true);
+            title.set_max_width_chars(48);
+            title.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+            let domain = gtk4::Label::new(Some(display_domain(&mark.url)));
+            domain.set_xalign(0.0);
+            domain.set_hexpand(true);
+            domain.set_max_width_chars(48);
+            domain.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+            domain.add_css_class("dim-label");
+            stack.append(&title);
+            stack.append(&domain);
+            let row = gtk4::ListBoxRow::new();
+            row.set_child(Some(&stack));
+            row.set_activatable(true);
+            self.bm_list.append(&row);
+        }
+    }
+
+    /// Reload tabs currently showing the start page (fresh data after an
+    /// engine switch).
     fn reload_start_pages(&self) {
         let start = newtab_url();
         for entry in self.tabs.borrow().entries.iter() {
@@ -2044,8 +2070,7 @@ impl Shell {
             }
         }
         // The start page names the engine and posts to its form.
-        let bookmarks_snapshot = self.bookmarks.borrow().clone();
-        write_newtab_page(engine, &self.frequent_sites(), &bookmarks_snapshot);
+        write_newtab_page(engine, &self.frequent_sites());
         self.reload_start_pages();
         self.engine_btn.set_label(engine.name());
         self.entry.set_placeholder_text(Some("Search or type a URL"));
@@ -2430,11 +2455,7 @@ impl Shell {
 
     /// Startup: restore only when the user asked for it.
     fn start_session(self: &Rc<Self>) {
-        write_newtab_page(
-            self.prefs.borrow().engine,
-            &self.frequent_sites(),
-            &self.bookmarks.borrow(),
-        );
+        write_newtab_page(self.prefs.borrow().engine, &self.frequent_sites());
         let restore = self.prefs.borrow().restore_session;
         if !restore || self.restore_previous_session() == 0 {
             self.add_blank_tab();
@@ -2828,7 +2849,7 @@ fn install_theme() {
 fn build_ui(app: &adw::Application) {
     let prefs_store = PrefsStore::new(prefs_path());
     let prefs = prefs_store.load();
-    write_newtab_page(prefs.engine, &[], &[]);
+    write_newtab_page(prefs.engine, &[]);
 
     let session = shared_session();
     let context = shared_context();
@@ -2941,12 +2962,29 @@ fn build_ui(app: &adw::Application) {
         .tooltip_text("Menu")
         .build();
 
+    // Bookmarks menu in the header, next to the app menu: the browser
+    // convention for reaching saved pages without opening a new tab.
+    // Scrolled with a height cap so large collections stay on screen.
+    let bm_list = gtk4::ListBox::new();
+    bm_list.set_selection_mode(gtk4::SelectionMode::Single);
+    let bm_scroll = gtk4::ScrolledWindow::new();
+    bm_scroll.set_child(Some(&bm_list));
+    bm_scroll.set_max_content_height(420);
+    bm_scroll.set_propagate_natural_height(true);
+    let bm_popover = gtk4::Popover::new();
+    bm_popover.set_child(Some(&bm_scroll));
+    let bm_menu_btn =
+        gtk4::MenuButton::builder().icon_name("starred-symbolic").tooltip_text("Bookmarks").build();
+    bm_menu_btn.set_popover(Some(&bm_popover));
+    bm_menu_btn.add_css_class("flat");
+
     let header = adw::HeaderBar::new();
     header.pack_start(&back);
     header.pack_start(&fwd);
     header.pack_start(&reload);
     header.set_title_widget(Some(&omnibox_box));
     header.pack_end(&menu_btn);
+    header.pack_end(&bm_menu_btn);
     header.pack_end(&new_btn);
 
     let progress = gtk4::ProgressBar::new();
@@ -3014,6 +3052,7 @@ fn build_ui(app: &adw::Application) {
         last_session: RefCell::new(Vec::new()),
         last_sample: RefCell::new(None),
         suggest_pop: suggest_popover.clone(),
+        bm_list: bm_list.clone(),
         history,
         bookmarks,
         bookmarks_store,
@@ -3030,6 +3069,29 @@ fn build_ui(app: &adw::Application) {
             s.toggle_bookmark();
         });
     }
+    {
+        let s = shell.clone();
+        let list = bm_list.clone();
+        let popover = bm_popover.clone();
+        list.connect_row_activated(move |_, row| {
+            // Positional mapping: refresh_bookmarks_menu rebuilds rows in
+            // store order, so row N is bookmark N. The empty state is a
+            // placeholder, not a row, and never reaches here.
+            let index = usize::try_from(row.index()).ok();
+            let url = index.and_then(|i| s.bookmarks.borrow().get(i).map(|mark| mark.url.clone()));
+            // The empty-state label is not a bookmark row: guard by child.
+            let usable = row.child().is_some_and(|child| child.is::<gtk4::Box>());
+            popover.popdown();
+            if usable
+                && let Some(url) = url
+                && let Some(view) = selected_view(&s.tab_view)
+            {
+                view.load_uri(&url);
+                view.grab_focus();
+            }
+        });
+    }
+    shell.refresh_bookmarks_menu();
 
     {
         // Live find as you type, plus Enter to jump to the next match.

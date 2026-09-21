@@ -84,6 +84,19 @@ pub fn resolve(input: &str, engine: SearchEngine) -> String {
     // Spaces are illegal in a URI; the search branch escapes them via the
     // query encoder.
     let escaped = t.replace(' ', "%20");
+    // Tolerate a mangled scheme: "https//host" and "https:/host" never
+    // contain "://", so without this they would gain a second prefix and
+    // load as "https://https//host".
+    for (broken, fixed) in [("https//", "https://"), ("http//", "http://")] {
+        if lower.starts_with(broken) {
+            return format!("{fixed}{}", &escaped[broken.len()..]);
+        }
+    }
+    for (broken, fixed) in [("https:/", "https://"), ("http:/", "http://")] {
+        if lower.starts_with(broken) && !lower.starts_with(fixed) {
+            return format!("{fixed}{}", &escaped[broken.len()..]);
+        }
+    }
     if lower.contains("://") || lower.starts_with("about:") {
         escaped
     } else if is_loopback(&lower) {
@@ -164,6 +177,14 @@ mod tests {
     fn hosts_gain_https() {
         assert_eq!(resolve("example.com", SearchEngine::Bing), "https://example.com");
         assert_eq!(resolve("  sxch.dev  ", SearchEngine::Bing), "https://sxch.dev");
+    }
+
+    #[test]
+    fn mangled_schemes_gain_exactly_one_prefix() {
+        assert_eq!(resolve("https//example.com", SearchEngine::Bing), "https://example.com");
+        assert_eq!(resolve("http//example.com/a", SearchEngine::Bing), "http://example.com/a");
+        assert_eq!(resolve("https:/example.com", SearchEngine::Bing), "https://example.com");
+        assert_eq!(resolve("HTTPS//Example.COM", SearchEngine::Bing), "https://Example.COM");
     }
 
     #[test]
