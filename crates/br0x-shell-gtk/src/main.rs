@@ -352,9 +352,7 @@ fn history_html(history: &History, query: Option<&str>, clear: bool) -> String {
     * {{ box-sizing: border-box; }}
     body {{
       margin: 0;
-      background:
-        radial-gradient(900px 420px at 50% -6%, light-dark(#eef2fb, #2a3140) 0%, transparent 60%),
-        light-dark(#ffffff, #1e1e1e);
+      background-color: light-dark(#ffffff, #1e1e1e);
       color: light-dark(#1c1c1c, #e8e8e8);
       font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
       font-size: 14px;
@@ -364,6 +362,14 @@ fn history_html(history: &History, query: Option<&str>, clear: bool) -> String {
       max-width: 760px;
       margin: 0 auto;
       padding: 40px 24px 80px;
+      animation: fade 150ms ease-out;
+    }}
+    @keyframes fade {{
+      from {{ opacity: 0; }}
+      to {{ opacity: 1; }}
+    }}
+    @media (prefers-reduced-motion: reduce) {{
+      .wrap {{ animation: none; }}
     }}
     .header-panel {{
       position: sticky;
@@ -902,9 +908,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit]) -> String {
     * {{ box-sizing: border-box; }}
     body {{
       margin: 0;
-      background:
-        radial-gradient(1100px 520px at 50% -8%, light-dark(#e8eefc, #2b3346) 0%, transparent 62%),
-        light-dark(#ffffff, #1e1e1e);
+      background-color: light-dark(#ffffff, #1e1e1e);
       color: light-dark(#1c1c1c, #e8e8e8);
       font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
       font-size: 14px;
@@ -930,24 +934,19 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit]) -> String {
       margin: 0;
     }}
     .hero {{
-      position: relative;
       display: flex;
       flex-direction: column;
       align-items: center;
       text-align: center;
-      z-index: 0;
+      animation: rise 200ms ease-out both;
     }}
-    .hero::before {{
-      content: "";
-      position: absolute;
-      inset: -36px -80px -20px;
-      z-index: -1;
-      pointer-events: none;
-      background: radial-gradient(
-        320px 120px at 50% 30%,
-        color-mix(in srgb, AccentColor 22%, transparent),
-        transparent 70%
-      );
+    @keyframes rise {{
+      from {{ opacity: 0; transform: translateY(8px); }}
+      to {{ opacity: 1; transform: none; }}
+    }}
+    @keyframes pop {{
+      from {{ opacity: 0; transform: scale(0.96) translateY(4px); }}
+      to {{ opacity: 1; transform: none; }}
     }}
     .wordmark .zero {{
       color: light-dark(#2f6fed, #7aa6ff);
@@ -988,6 +987,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit]) -> String {
       font: inherit;
       font-size: 15px;
       box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 12px 32px rgba(15, 23, 42, 0.08);
+      transition: border-color 150ms ease, box-shadow 150ms ease;
     }}
     .engine-badge {{
       position: absolute;
@@ -1038,12 +1038,20 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit]) -> String {
       border: 1px solid light-dark(#e8eaf0, #383838);
       border-radius: 16px;
       padding: 12px 14px;
-      transition: transform 120ms ease, box-shadow 120ms ease;
+      transition: transform 130ms ease-out, box-shadow 130ms ease-out, border-color 130ms ease-out;
+      animation: rise 200ms ease-out both;
     }}
+    .grid .card:nth-child(2) {{ animation-delay: 25ms; }}
+    .grid .card:nth-child(3) {{ animation-delay: 50ms; }}
+    .grid .card:nth-child(4) {{ animation-delay: 75ms; }}
+    .grid .card:nth-child(5) {{ animation-delay: 100ms; }}
+    .grid .card:nth-child(6) {{ animation-delay: 125ms; }}
+    .grid .card:nth-child(7) {{ animation-delay: 150ms; }}
+    .grid .card:nth-child(8) {{ animation-delay: 175ms; }}
     a.card:hover {{
       transform: translateY(-1px);
-      border-color: color-mix(in srgb, AccentColor 55%, transparent);
-      box-shadow: 0 6px 18px rgba(15, 23, 42, 0.1), 0 0 0 3px color-mix(in srgb, AccentColor 16%, transparent);
+      border-color: light-dark(#c3ccd9, #4a4a4a);
+      box-shadow: 0 6px 18px rgba(15, 23, 42, 0.1);
     }}
     .section-count {{
       font-weight: 600;
@@ -1189,6 +1197,14 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit]) -> String {
     footer a:hover {{
       text-decoration: underline;
     }}
+    @media (prefers-reduced-motion: reduce) {{
+      .hero, .grid .card, .modal-backdrop.open .modal {{
+        animation: none;
+      }}
+      a.card, .search-field, button.add-card {{
+        transition: none;
+      }}
+    }}
     .hint {{
       color: light-dark(#5f6672, #9e9e9e);
     }}
@@ -1204,6 +1220,9 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit]) -> String {
     }}
     .modal-backdrop.open {{
       display: flex;
+    }}
+    .modal-backdrop.open .modal {{
+      animation: pop 160ms ease-out;
     }}
     .modal {{
       width: 100%;
