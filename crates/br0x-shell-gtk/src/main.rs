@@ -768,17 +768,48 @@ fn connect_downloads(session: &webkit6::NetworkSession, toasts: &adw::ToastOverl
     });
 }
 
-/// Write the start page for the chosen engine and return its file URL.
-/// A file keeps the page offline, instant, and user editable.
-/// Always rewrites: Frequent embeds live history, so a cache
-/// by engine alone would serve stale sites.
-fn write_newtab_page(engine: SearchEngine, frequent: &[Visit]) -> String {
+/// Write the start page file. A file keeps the page offline, instant, and
+/// user editable. False when the write failed, so the caller keeps the page
+/// marked stale and retries instead of serving the old one forever.
+fn write_newtab_page(engine: SearchEngine, frequent: &[Visit]) -> bool {
     let path = newtab_path();
     if let Some(parent) = std::path::Path::new(&path).parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     if std::fs::write(&path, newtab_html(engine, frequent)).is_err() {
         eprintln!("br0x: could not write {path}");
+        return false;
+    }
+    true
+}
+
+/// True when the start page file no longer matches the inputs it was built
+/// from. Frequent embeds live history, so the engine alone is not a safe
+/// key: titles and visit times shape the cards and order too.
+fn newtab_page_stale(
+    cached: Option<&(SearchEngine, Vec<Visit>)>,
+    engine: SearchEngine,
+    frequent: &[Visit],
+) -> bool {
+    cached.is_none_or(|(cached_engine, cached_frequent)| {
+        *cached_engine != engine || cached_frequent.as_slice() != frequent
+    })
+}
+
+/// Write the start page only when it is stale, and return its file URL
+/// either way. Repeats with an unchanged engine and history — every Ctrl+T —
+/// cost a comparison instead of a rewrite of the whole page.
+fn sync_newtab_page(
+    last: &RefCell<Option<(SearchEngine, Vec<Visit>)>>,
+    engine: SearchEngine,
+    frequent: &[Visit],
+) -> String {
+    let stale = {
+        let cached = last.borrow();
+        newtab_page_stale(cached.as_ref(), engine, frequent)
+    };
+    if stale && write_newtab_page(engine, frequent) {
+        last.replace(Some((engine, frequent.to_vec())));
     }
     newtab_url()
 }
@@ -1828,6 +1859,8 @@ struct Shell {
     zoom_toast: RefCell<Option<adw::Toast>>,
     last_session: RefCell<Vec<StoredTab>>,
     last_sample: RefCell<Option<(Instant, br0x_core::tab::SysState)>>,
+    /// Engine and frequent list the start page file was last built from.
+    last_newtab: RefCell<Option<(SearchEngine, Vec<Visit>)>>,
     suggest_pop: gtk4::Popover,
     bm_list: gtk4::ListBox,
     history: Rc<RefCell<Option<History>>>,
@@ -1881,13 +1914,20 @@ impl Shell {
     fn add_blank_tab(self: &Rc<Self>) {
         let (view, _) = self.create_tab(None, true);
         let engine = self.prefs.borrow().engine;
-        let url = write_newtab_page(engine, &self.frequent_sites());
+        let url = self.refresh_start_page(engine);
         view.load_uri(&url);
     }
 
     /// Top sites for the start page. Empty when history is unavailable.
     fn frequent_sites(&self) -> Vec<Visit> {
         self.history.borrow().as_ref().and_then(|h| h.top(8).ok()).unwrap_or_default()
+    }
+
+    /// Start page for `engine` and the current frequent sites, rewritten
+    /// only when either changed since the last write. Returns its file URL.
+    fn refresh_start_page(self: &Rc<Self>, engine: SearchEngine) -> String {
+        let frequent = self.frequent_sites();
+        sync_newtab_page(&self.last_newtab, engine, &frequent)
     }
 
     fn add_tab(self: &Rc<Self>, url: &str, select: bool, load: bool, title: Option<&str>) {
@@ -2070,7 +2110,7 @@ impl Shell {
             }
         }
         // The start page names the engine and posts to its form.
-        write_newtab_page(engine, &self.frequent_sites());
+        self.refresh_start_page(engine);
         self.reload_start_pages();
         self.engine_btn.set_label(engine.name());
         self.entry.set_placeholder_text(Some("Search or type a URL"));
@@ -2455,7 +2495,8 @@ impl Shell {
 
     /// Startup: restore only when the user asked for it.
     fn start_session(self: &Rc<Self>) {
-        write_newtab_page(self.prefs.borrow().engine, &self.frequent_sites());
+        let engine = self.prefs.borrow().engine;
+        self.refresh_start_page(engine);
         let restore = self.prefs.borrow().restore_session;
         if !restore || self.restore_previous_session() == 0 {
             self.add_blank_tab();
@@ -2849,7 +2890,10 @@ fn install_theme() {
 fn build_ui(app: &adw::Application) {
     let prefs_store = PrefsStore::new(prefs_path());
     let prefs = prefs_store.load();
-    write_newtab_page(prefs.engine, &[]);
+    // Handed to the shell below, so its startup write can skip this page
+    // when the engine and history still match what was written here.
+    let last_newtab: RefCell<Option<(SearchEngine, Vec<Visit>)>> = RefCell::new(None);
+    sync_newtab_page(&last_newtab, prefs.engine, &[]);
 
     let session = shared_session();
     let context = shared_context();
@@ -3051,6 +3095,7 @@ fn build_ui(app: &adw::Application) {
         zoom_toast: RefCell::new(None),
         last_session: RefCell::new(Vec::new()),
         last_sample: RefCell::new(None),
+        last_newtab,
         suggest_pop: suggest_popover.clone(),
         bm_list: bm_list.clone(),
         history,
@@ -3446,6 +3491,29 @@ mod tests {
     #[test]
     fn clear_inside_the_search_text_does_not_clear() {
         assert_eq!(history_request("br0x://history?q=clear%3D1"), (Some("clear=1".into()), false));
+    }
+
+    #[test]
+    fn start_page_is_stale_only_when_its_inputs_change() {
+        fn visit(url: &str, title: &str, at: i64) -> Visit {
+            Visit { url: url.to_string(), title: title.to_string(), visited_at: at }
+        }
+        let sites = vec![visit("https://a.example", "A", 10)];
+        let cached = (SearchEngine::DuckDuckGo, sites.clone());
+        // Nothing written yet: the page has to be built.
+        assert!(newtab_page_stale(None, SearchEngine::DuckDuckGo, &sites));
+        assert!(!newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &sites));
+        // Engine, list content, and list order all change the page.
+        assert!(newtab_page_stale(Some(&cached), SearchEngine::Google, &sites));
+        let mut more = sites.clone();
+        more.push(visit("https://b.example", "B", 20));
+        assert!(newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &more));
+        let reordered = vec![more[1].clone(), sites[0].clone()];
+        assert!(newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &reordered));
+        assert!(newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &[]));
+        // Titles are card text, so a retitle must rewrite.
+        let retitled = vec![visit("https://a.example", "A renamed", 10)];
+        assert!(newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &retitled));
     }
 
     #[test]

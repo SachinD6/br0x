@@ -88,7 +88,21 @@ impl History {
         rows.collect()
     }
 
+    /// Search history. Address-bar needles are usually URL prefixes, so a
+    /// prefix pass runs first; when it fills `limit` the full url+title
+    /// substring scan is skipped.
     pub fn search(&self, needle: &str, limit: usize) -> rusqlite::Result<Vec<Visit>> {
+        // Stored URLs always start with a scheme, so a needle that cannot
+        // open one ("rust", "zzz-nothing") can never prefix-match: running
+        // the extra scan would only double the cost of ordinary typing.
+        let mut hits = if needle_can_prefix_match(needle) {
+            self.search_url_prefix(needle, limit)?
+        } else {
+            Vec::new()
+        };
+        if hits.len() >= limit {
+            return Ok(hits);
+        }
         let pattern = like_pattern(needle);
         let mut stmt = self.conn.prepare(
             "SELECT url, title, visited_at FROM visits
@@ -96,6 +110,32 @@ impl History {
              ORDER BY visited_at DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![pattern, limit as i64], |row| {
+            Ok(Visit { url: row.get(0)?, title: row.get(1)?, visited_at: row.get(2)? })
+        })?;
+        for row in rows {
+            let visit = row?;
+            // Prefix hits already cover these rows and stay ranked first.
+            if hits.contains(&visit) {
+                continue;
+            }
+            hits.push(visit);
+            if hits.len() >= limit {
+                break;
+            }
+        }
+        Ok(hits)
+    }
+
+    /// Visits whose URL starts with `needle`, newest first. The visited_at
+    /// index order plus LIMIT lets the scan stop as soon as it has `limit`
+    /// matches, which is the cheap path this exists for.
+    fn search_url_prefix(&self, needle: &str, limit: usize) -> rusqlite::Result<Vec<Visit>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT url, title, visited_at FROM visits
+             WHERE url LIKE ?1 ESCAPE '\\'
+             ORDER BY visited_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![like_prefix_pattern(needle), limit as i64], |row| {
             Ok(Visit { url: row.get(0)?, title: row.get(1)?, visited_at: row.get(2)? })
         })?;
         rows.collect()
@@ -157,14 +197,37 @@ fn collapse_legacy_duplicates(conn: &Connection) {
 fn like_pattern(needle: &str) -> String {
     let mut out = String::with_capacity(needle.len() + 2);
     out.push('%');
+    escape_like(needle, &mut out);
+    out.push('%');
+    out
+}
+
+/// Anchor the needle to the start of the URL, escaping LIKE wildcards so they
+/// match literally.
+fn like_prefix_pattern(needle: &str) -> String {
+    let mut out = String::with_capacity(needle.len() + 1);
+    escape_like(needle, &mut out);
+    out.push('%');
+    out
+}
+
+/// Whether `needle` could open a stored URL, i.e. is a prefix of one.
+/// Stored URLs always start with a scheme, so plain words ("rust") can
+/// never match the anchored pass — skip it and avoid a second scan.
+fn needle_can_prefix_match(needle: &str) -> bool {
+    let lower = needle.to_lowercase();
+    lower.contains("://") || "https://".starts_with(&lower) || "http://".starts_with(&lower)
+}
+
+/// Append `needle` to `out`, backslashing LIKE wildcards so they match
+/// literally under `ESCAPE '\'`.
+fn escape_like(needle: &str, out: &mut String) {
     for c in needle.chars() {
         if matches!(c, '%' | '_' | '\\') {
             out.push('\\');
         }
         out.push(c);
     }
-    out.push('%');
-    out
 }
 
 #[cfg(test)]
@@ -203,6 +266,69 @@ mod tests {
     }
 
     #[test]
+    fn search_ranks_url_prefix_matches_first() {
+        let h = History::open_in_memory().unwrap();
+        // Newer row matches only by title; the older row is a URL prefix.
+        h.record("https://example.com/rust", "Rust at https://rust-lang.org", 300).unwrap();
+        h.record("https://rust-lang.org/book", "Rust book", 100).unwrap();
+        let hits = h.search("https://rust", 10).unwrap();
+        assert_eq!(hits.len(), 2);
+        // Older prefix hit outranks the newer substring-only hit.
+        assert_eq!(hits[0].url, "https://rust-lang.org/book");
+        assert_eq!(hits[1].url, "https://example.com/rust");
+    }
+
+    #[test]
+    fn search_falls_back_to_substring_matches() {
+        let h = History::open_in_memory().unwrap();
+        h.record("https://example.com/a/rust", "A", 1).unwrap();
+        h.record("https://example.com/b", "Rust notes", 2).unwrap();
+        let hits = h.search("rust", 10).unwrap();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].url, "https://example.com/b");
+        assert_eq!(hits[1].url, "https://example.com/a/rust");
+    }
+
+    #[test]
+    fn search_respects_limit() {
+        let h = History::open_in_memory().unwrap();
+        for i in 0..5 {
+            h.record(&format!("https://prefix.example/{i}"), "Prefix", 100 + i).unwrap();
+        }
+        h.record("https://other.example/0", "See https://prefix.example", 500).unwrap();
+        h.record("https://other.example/1", "See https://prefix.example", 600).unwrap();
+        // The prefix pass alone fills the limit.
+        let hits = h.search("https://prefix", 3).unwrap();
+        assert_eq!(hits.len(), 3);
+        assert!(hits.iter().all(|v| v.url.starts_with("https://prefix.example/")));
+        // Merged prefix and substring hits are truncated to the limit.
+        let hits = h.search("https://prefix", 6).unwrap();
+        assert_eq!(hits.len(), 6);
+        assert!(hits[..5].iter().all(|v| v.url.starts_with("https://prefix.example/")));
+        assert_eq!(hits[5].url, "https://other.example/1");
+    }
+
+    #[test]
+    fn search_treats_wildcards_literally_in_prefix_pass() {
+        let h = History::open_in_memory().unwrap();
+        h.record("https://100%_off.example/one", "Sale", 1).unwrap();
+        h.record("https://100xoff.example/two", "Sale", 2).unwrap();
+        h.record("https://example.com/100%_off", "Sale", 3).unwrap();
+        // Anchored pass: only the URL that literally starts with it.
+        let hits = h.search("https://100%_off", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].url, "https://100%_off.example/one");
+        // Scheme-less needles use the substring pass, newest first, with
+        // `%` literal so `100xoff.example` never matches.
+        let hits = h.search("100%_off", 10).unwrap();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].url, "https://example.com/100%_off");
+        assert_eq!(hits[1].url, "https://100%_off.example/one");
+        // `_` is literal: nothing contains "100_".
+        assert!(h.search("100_", 10).unwrap().is_empty());
+    }
+
+    #[test]
     fn search_treats_wildcards_literally() {
         let h = History::open_in_memory().unwrap();
         h.record("https://shop.example/100%_off", "Sale", 1).unwrap();
@@ -211,6 +337,15 @@ mod tests {
         assert_eq!(h.search("%_", 10).unwrap().len(), 1);
         assert_eq!(h.search("\\", 10).unwrap().len(), 0);
         assert_eq!(h.search("_", 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn scheme_less_needles_skip_the_prefix_pass() {
+        assert!(!needle_can_prefix_match("rust"));
+        assert!(!needle_can_prefix_match("example.com"));
+        assert!(needle_can_prefix_match("https://rust-lang.org"));
+        assert!(needle_can_prefix_match("http"));
+        assert!(needle_can_prefix_match("h"));
     }
 
     #[test]
