@@ -10,7 +10,12 @@ Mozilla Firefox 153.0.4; Brave Browser 151.1.93.136.
 Install sizes: `target/release/br0x` 0.8 MB, `/usr/lib/firefox` 304 MB,
 `/opt/brave-bin` 470 MB. (br0x links the system WebKitGTK dynamically, so
 its binary size flatters it — the engine lives in shared system libraries.)
-Chrome/Chromium are not installed here: **not measured**, no numbers invented.
+
+Update 2026-09-21 evening: Google Chrome 153.0.8010.52 installed
+(`/opt/google/chrome`, 434 MB) and measured with the same method; br0x
+re-measured on current sources (binary 802,296 bytes). Chrome trials and
+refreshed br0x trials are appended below; the medians table and verdict
+reflect all runs.
 
 ## Method
 
@@ -97,11 +102,47 @@ Brave 151.1.93.136:
 | browser | startup 1/5/10 tabs (ms) | PSS 1/5/10 tabs (MB) | idle CPU 1/5/10 (% core) |
 |---|---|---|---|
 | br0x | 1584 (1342–2854) / 1586 (1347–1820) / 1352 (1350–2379) | 393 (389–413) / 734 (702–736) / 731 (670–910) | 0.0 / 0.2 / 0.3 |
+| br0x (retest, current sources) | 2034 (1742–2300) / 1708 (1577–1740) / 2071 (1536–2381) | 341 (331–342) / 637 (518–646) / 810 (457–862) | — / 0.1 / — |
 | Firefox | 2041 (1689–2041) / 2265 (1914–2271) / 2152 (2148–3971) | 714 (713–787) / 871 (790–878) / 888 (818–901) | 4.6 / 8.8 / 8.4 |
 | Brave | 1210 (821–1334) / 1375 (1309–1440) / 1196 (1186–1978) | 900 (882–914) / 1133 (1097–1141) / 1336 (1291–1415) | 3.0 / 0.3 / 0.1 |
+| Chrome 153 | 1095 (880–1828) / 1326 (1104–1418) / 1376 (1027–1403) | 1173 (971–1177) / 1327 (1293–1348) / 1521 (1509–1531) | — / 2.4 / — |
 
 Incremental cost per extra tab (median 10-tab minus 1-tab, /9):
-br0x ~38 MB, Brave ~49 MB, Firefox ~19 MB.
+br0x ~38 MB (retest ~52 MB), Brave ~49 MB, Firefox ~19 MB, Chrome ~39 MB.
+
+## Chrome 153.0.8010.52 trials (same method, fresh `--user-data-dir` per trial)
+
+| trial | startup | procs | PSS |
+|---|---|---|---|
+| 1 tab r1 | 1828 | 39 | 1177.1 |
+| 1 tab r2 | 1095 | 39 | 971.2 |
+| 1 tab r3 | 880 | 39 | 1173.2 |
+| 5 tab r1 | 1104 | 55 | 1348.2 |
+| 5 tab r2 | 1418 | 55 | 1327.2 |
+| 5 tab r3 | 1326 | 55 | 1292.8 |
+| 10 tab r1 | 1376 | 75 | 1521.3 |
+| 10 tab r2 | 1027 | 75 | 1531.0 |
+| 10 tab r3 | 1403 | 75 | 1508.5 |
+
+Idle CPU (5 static tabs, 10 s sample): Chrome 2.4%, br0x 0.1%,
+Firefox 42.0%, Brave 0.3% — all with fully fresh, unwarmed profiles this
+time (the earlier 4–9% Firefox figure used a warmed template profile, so
+first-run background work explains the gap; treat 42% as a cold-start
+artifact, not steady state).
+
+## br0x retest trials (current sources, fresh XDG dirs per trial)
+
+| trial | startup | procs | PSS |
+|---|---|---|---|
+| 1 tab r1 | 2300 | 8 | 331.4 |
+| 1 tab r2 | 1742 | 8 | 342.3 |
+| 1 tab r3 | 2034 | 8 | 340.6 |
+| 5 tab r1 | 1577 | 68 | 518.3 |
+| 5 tab r2 | 1708 | 68 | 637.4 |
+| 5 tab r3 | 1740 | 68 | 646.2 |
+| 10 tab r1 | 2071 | 158 | 456.7 |
+| 10 tab r2 | 2381 | 158 | 862.1 |
+| 10 tab r3 | 1536 | 158 | 810.3 |
 
 ## Verdict
 
@@ -115,6 +156,14 @@ which is worth investigating even though PSS stays low. Firefox has the best
 per-tab scaling but the slowest startup and persistently the highest idle CPU
 (4–9% on static pages — background task churn, cause not diagnosed). Brave
 starts fastest and idles quietly but uses the most memory at every tab count.
+
+Chrome sits between Brave and Firefox on memory (heaviest at 1 tab,
+1173 MB, but the flattest growth at ~39 MB per extra tab) and starts
+quickly (~1.1–1.4 s). Its 10-tab process tree (75) is far leaner than
+br0x's (128–158). br0x still wins absolute memory everywhere and binary
+size by two orders of magnitude, but its per-tab scaling (~38–52 MB)
+no longer looks special next to Chrome (~39 MB) — only Firefox (~19 MB)
+scales clearly cheaper, at the cost of the slowest startup.
 
 ## Methodology limits
 
