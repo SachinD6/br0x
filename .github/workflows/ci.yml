@@ -7,13 +7,16 @@ on:
 jobs:
   rust:
     runs-on: ubuntu-latest
+    # Ubuntu's GTK (4.14) is older than the bindings need (gtk4 4.21+,
+    # libadwaita 1.9, webkitgtk-6.0 2.52). Arch rolling ships them all.
+    container: archlinux:latest
     steps:
+      - name: Install system deps
+        run: pacman -Sy --noconfirm --needed base-devel git curl pkgconf gtk4 libadwaita webkitgtk-6.0
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Install GTK deps
-        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
