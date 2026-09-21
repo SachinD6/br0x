@@ -1536,7 +1536,7 @@ fn refresh_nav(tab_view: &adw::TabView, back: &gtk4::Button, fwd: &gtk4::Button)
     fwd.set_sensitive(can_fwd);
 }
 
-/// Shortest typed text that opens the address-bar suggestion list.
+/// Shortest typed text that opens address-bar suggestions.
 const SUGGESTION_MIN_CHARS: usize = 2;
 /// Most suggestions shown at once.
 const SUGGESTION_LIMIT: usize = 8;
@@ -1570,7 +1570,6 @@ fn fill_suggestions(
         url_label.set_hexpand(true);
         url_label.set_max_width_chars(64);
         url_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
-        url_label.add_css_class("suggest-url");
         let title_label = gtk4::Label::new(Some(&title));
         title_label.set_xalign(0.0);
         title_label.set_hexpand(true);
@@ -1704,6 +1703,7 @@ struct Shell {
     find_status: gtk4::Label,
     toasts: adw::ToastOverlay,
     zoom_toast: RefCell<Option<adw::Toast>>,
+    suggest_pop: gtk4::Popover,
     history: Rc<RefCell<Option<History>>>,
     bookmarks: Rc<RefCell<Vec<Bookmark>>>,
     bookmarks_store: BookmarkStore,
@@ -2081,6 +2081,17 @@ impl Shell {
                 );
             }
         });
+
+        // Clicking the page dismisses the suggestion list. Capture phase
+        // only observes: the handler returns nothing, so page clicks
+        // behave exactly as before.
+        let pop = self.suggest_pop.clone();
+        let page_click = gtk4::GestureClick::new();
+        page_click.set_propagation_phase(gtk4::PropagationPhase::Capture);
+        page_click.connect_pressed(move |_, _, _, _| {
+            pop.popdown();
+        });
+        view.add_controller(page_click);
 
         // target=_blank and window.open land here. Returning the new view
         // makes WebKit load the request into it. Without a handler they
@@ -2610,21 +2621,6 @@ fn install_theme() {
             font-weight: 600;
         }
 
-        /* Floating suggestion panel under the address field. */
-        .suggest-popover {
-            border-radius: 14px;
-        }
-
-        .suggest-popover contents {
-            border-radius: 14px;
-            padding: 6px;
-            box-shadow: 0 12px 32px color-mix(in srgb, currentColor 18%, transparent);
-        }
-
-        .suggest-url {
-            font-weight: 700;
-        }
-
         .hairline-progress {
             min-height: 2px;
             padding: 0;
@@ -2676,9 +2672,7 @@ fn build_ui(app: &adw::Application) {
     tab_view.set_default_icon(&gio::ThemedIcon::new("web-browser-symbolic"));
     let tab_bar = adw::TabBar::new();
     tab_bar.set_view(Some(&tab_view));
-    // Left-hugging strip like mainstream browsers.
-    tab_bar.set_hexpand(false);
-    tab_bar.set_halign(gtk4::Align::Start);
+    tab_bar.set_hexpand(true);
     tab_bar.set_autohide(false);
 
     let back = gtk4::Button::from_icon_name("go-previous-symbolic");
@@ -2717,13 +2711,15 @@ fn build_ui(app: &adw::Application) {
     entry.set_icon_from_icon_name(gtk4::EntryIconPosition::Secondary, None);
     entry.set_icon_tooltip_text(gtk4::EntryIconPosition::Secondary, Some("Clear"));
 
-    // Suggestion list under the address bar, refilled from history on every
-    // keystroke. Not stored on Shell: the signal closures own the handles.
+    // Suggestion dropdown under the address bar, refilled from history on
+    // every keystroke. Deliberately NOT autohide: an autohide popover
+    // grabs the keyboard on popup and typing stops reaching the entry.
+    // Dismissal is explicit instead (Esc, pick, Enter, tab switch,
+    // navigation rewrite, page click).
     let suggest_popover = gtk4::Popover::new();
     suggest_popover.set_parent(&entry);
     suggest_popover.set_position(gtk4::PositionType::Bottom);
-    suggest_popover.set_autohide(true);
-    suggest_popover.add_css_class("suggest-popover");
+    suggest_popover.set_autohide(false);
     let suggest_list = gtk4::ListBox::new();
     suggest_list.set_selection_mode(gtk4::SelectionMode::Single);
     suggest_list.set_show_separators(true);
@@ -2839,6 +2835,7 @@ fn build_ui(app: &adw::Application) {
         find_status,
         toasts: toasts.clone(),
         zoom_toast: RefCell::new(None),
+        suggest_pop: suggest_popover.clone(),
         history,
         bookmarks,
         bookmarks_store,
@@ -2941,6 +2938,7 @@ fn build_ui(app: &adw::Application) {
         entry.connect_changed(move |e| {
             // Only while typing: the address bar also gets rewritten when a
             // page commits or a tab is switched, and neither is a search.
+            // Programmatic rewrites always close the list.
             let needle = e.text();
             let needle = needle.trim();
             let page_url = selected_view(&s.tab_view).and_then(|v| v.uri());
@@ -2952,11 +2950,10 @@ fn build_ui(app: &adw::Application) {
                 popover.popdown();
                 return;
             }
+            // No focus games here: without autohide the popup never takes
+            // the keyboard, so typing keeps flowing into the entry.
             if fill_suggestions(needle, &history, &list, &urls, s.prefs.borrow().engine) {
                 popover.popup();
-                // An autohide popover takes the keyboard when shown; the
-                // entry needs it back or the next key lands in the list.
-                e.grab_focus();
             } else {
                 popover.popdown();
             }
