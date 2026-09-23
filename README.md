@@ -56,6 +56,17 @@ br0x is a minimal browser for Linux. It uses Rust, GTK4, and WebKitGTK. It runs 
 
 ## Install
 
+One command for every distro (needs curl and sudo):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SachinD6/br0x/main/scripts/quick-install.sh | sh
+```
+
+It detects Arch, Fedora, Ubuntu and Debian, installs the build tools,
+then builds and registers the app. Ubuntu and Debian take the Flatpak
+build instead, since their system GTK is older than this codebase needs.
+Other options:
+
 - Arch (pacman repo, no AUR account needed): add this to `/etc/pacman.conf`,
   then `sudo pacman -Sy br0x` (ships `br0x`, a launcher entry, and an icon).
   ```ini
