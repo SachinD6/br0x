@@ -1,0 +1,31 @@
+name: pacman-repo
+on:
+  release:
+    types: [published]
+
+jobs:
+  repo:
+    # The floating `pacman` release update below must not retrigger this job.
+    if: github.event.release.tag_name != 'pacman'
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build package as non-root
+        run: |
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+          chown -R builder:builder .
+          runuser -u builder -- makepkg -s --noconfirm --needed
+      - name: Build repo database
+        run: repo-add br0x.db.tar.gz br0x-*.pkg.tar.zst
+      - name: Publish floating pacman release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: pacman
+          name: pacman repository
+          body: Rolling pacman repo database for br0x. Add it to pacman.conf and install with `pacman -S br0x`. Updated on every release.
+          files: |
+            br0x-*.pkg.tar.zst
+            br0x.db*
+            br0x.files*

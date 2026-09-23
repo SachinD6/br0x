@@ -56,7 +56,14 @@ br0x is a minimal browser for Linux. It uses Rust, GTK4, and WebKitGTK. It runs 
 
 ## Install
 
-- Arch (AUR): `yay -S br0x` (ships `br0x`, a launcher entry, and an icon).
+- Arch (pacman repo, no AUR account needed): add this to `/etc/pacman.conf`,
+  then `sudo pacman -Sy br0x` (ships `br0x`, a launcher entry, and an icon).
+  ```ini
+  [br0x]
+  SigLevel = Never
+  Server = https://github.com/SachinD6/br0x/releases/download/pacman
+  ```
+- Arch (AUR): `yay -S br0x`, once AUR registration reopens and the package is submitted.
 - Release tarball: download `br0x-<version>-x86_64.tar.gz` from
   GitHub Releases, then `./install.sh --prefix ~/.local`.
   Needs `gtk4`, `libadwaita`, and `webkitgtk-6.0` from your distro.

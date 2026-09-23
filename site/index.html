@@ -331,7 +331,7 @@ footer{border-top:1px solid var(--line);padding:32px 0 42px}
   <h1>The minimal Linux browser</h1>
   <p class="lede">br0x runs less on purpose. Idle tabs release their memory, trackers are refused before they load, and your history stays on your machine. Fewer processes, fewer requests, fewer settings.</p>
   <div class="cta-row">
-    <a class="btn btn-primary btn-lg" href="#install"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 2v8M5 7l3 3 3-3M3 13h10"/></svg>Install from AUR<span class="kbd">I</span></a>
+    <a class="btn btn-primary btn-lg" href="#install"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 2v8M5 7l3 3 3-3M3 13h10"/></svg>Install on Arch<span class="kbd">I</span></a>
     <a class="btn btn-ghost btn-lg" href="https://github.com/Sachind6/br0x/blob/main/docs/BENCHMARKS.md">Read the benchmarks<span class="kbd">B</span></a>
   </div>
   <p class="platform"><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="12.5" rx="7" ry="8.5" fill="#dce0e5"/><ellipse cx="12" cy="14.8" rx="4" ry="4.8" fill="#0f1115"/><circle cx="9.7" cy="8.6" r="1.1" fill="#0f1115"/><circle cx="14.3" cy="8.6" r="1.1" fill="#0f1115"/><path d="M12 10.4 10.4 12.2h3.2z" fill="#d9b878"/><ellipse cx="8" cy="20.8" rx="2.4" ry="1.2" fill="#d9b878"/><ellipse cx="16" cy="20.8" rx="2.4" ry="1.2" fill="#d9b878"/></svg><span>Arch and Flatpak builds, on any Linux with GTK4 and WebKitGTK 6.0</span></p>
@@ -565,13 +565,13 @@ footer{border-top:1px solid var(--line);padding:32px 0 42px}
     <img class="install-mark" src="logo.jpg" alt="br0x logo: a blue ring with a parked-tab gap on dark charcoal" width="96" height="96">
     <h2>Download less browser</h2>
     <div class="cmd">
-      <code id="cmdText">yay -S br0x</code>
+      <code id="cmdText">printf '[br0x]\nSigLevel = Never\nServer = https://github.com/SachinD6/br0x/releases/download/pacman\n' | sudo tee -a /etc/pacman.conf</code>
       <button type="button" id="copyBtn" aria-label="Copy the install command">
         <svg class="copy-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5.5" y="5.5" width="8" height="8"/><path d="M10.5 5.5V2.5h-8v8h3"/></svg>
         <svg class="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8.5l3.2 3.2L13 5"/></svg>
       </button>
     </div>
-    <p class="note">One package, one binary, one launcher entry. Release tarballs live on <a href="https://github.com/Sachind6/br0x/releases">GitHub Releases</a>, and the source builds with <kbd>cargo run --release -p br0x-shell-gtk</kbd> after <kbd>sudo pacman -S --needed base-devel pkgconf gtk4 libadwaita webkitgtk-6.0 rustup</kbd>. Media pages need the GStreamer packages, or the web process exits when audio starts.</p>
+    <p class="note">Then <kbd>sudo pacman -Sy br0x</kbd>: one package, one binary, one launcher entry. Prefer a tarball? They live on <a href="https://github.com/SachinD6/br0x/releases">GitHub Releases</a>. An AUR package follows once AUR registration reopens. Media pages need the GStreamer packages, or the web process exits when audio starts.</p>
   </div>
 </section>
 </main>
