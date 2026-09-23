@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=br0x
+Comment=A Linux browser that parks idle tabs
+Exec=br0x %U
+Icon=org.br0x.Browser
+Terminal=false
+Type=Application
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+StartupWMClass=org.br0x.Browser
+Keywords=browser;web;tabs;webkit;
+SingleMainWindow=true

@@ -1,0 +1,32 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  tarball:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install system deps
+        run: pacman -Sy --noconfirm --needed base-devel git curl pkgconf gtk4 libadwaita webkitgtk-6.0
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build release binary
+        run: cargo build --release --locked -p br0x-shell-gtk
+      - name: Assemble tarball
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          dir="br0x-$ver-x86_64"
+          mkdir -p "$dir"
+          cp target/release/br0x "$dir/"
+          cp packaging/org.br0x.Browser.desktop packaging/org.br0x.Browser.metainfo.xml packaging/org.br0x.Browser.svg packaging/logo.jpg "$dir/"
+          cp scripts/install.sh "$dir/"
+          cp LICENSE README.md "$dir/"
+          tar -czf "$dir.tar.gz" "$dir"
+          echo "TARBALL=$dir.tar.gz" >> "$GITHUB_ENV"
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.TARBALL }}
+          generate_release_notes: true

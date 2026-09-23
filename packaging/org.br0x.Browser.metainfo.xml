@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.br0x.Browser</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>br0x</name>
+  <summary>A Linux browser that parks idle tabs</summary>
+  <description>
+    <p>
+      br0x is a fast browser for Linux built with Rust, GTK4, and WebKitGTK.
+      Idle tabs release their web process, a base block list filters trackers
+      locally, and nothing leaves the machine.
+    </p>
+  </description>
+  <developer id="org.br0x">
+    <name>br0x contributors</name>
+  </developer>
+  <launchable type="desktop-id">org.br0x.Browser.desktop</launchable>
+  <provides>
+    <id>org.br0x.Browser.desktop</id>
+  </provides>
+  <url type="homepage">https://github.com/Sachind6/br0x</url>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.1.0" date="2026-09-23">
+      <description>
+        <p>First installable release: desktop entry, AUR package, Flatpak manifest.</p>
+      </description>
+    </release>
+  </releases>
+</component>

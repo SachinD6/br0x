@@ -8,20 +8,26 @@ finish-args:
   - --share=ipc
   - --socket=wayland
   - --socket=fallback-x11
+  - --socket=pulseaudio
   - --device=dri
   - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.freedesktop.portal.*
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
 modules:
   - name: br0x
     buildsystem: simple
+    # Local builds use the network. For Flathub, vendor crates with
+    # flatpak-cargo-generator and list them under sources instead.
     sources:
       - type: dir
         path: ../..
-      - type: file
-        path: cargo-vendor.tar.gz
     build-commands:
-      - tar xf cargo-vendor.tar.gz
-      - cargo --offline build --release -p br0x-shell-gtk
-      - install -Dm755 ../target/release/br0x /app/bin/br0x
+      - cargo build --release --locked -p br0x-shell-gtk
+      - install -Dm755 target/release/br0x /app/bin/br0x
+      - install -Dm644 packaging/org.br0x.Browser.desktop /app/share/applications/org.br0x.Browser.desktop
+      - install -Dm644 packaging/org.br0x.Browser.metainfo.xml /app/share/metainfo/org.br0x.Browser.metainfo.xml
+      - install -Dm644 packaging/org.br0x.Browser.svg /app/share/icons/hicolor/scalable/apps/org.br0x.Browser.svg
     build-options:
       append-path: /usr/lib/sdk/rust-stable/bin
       env:

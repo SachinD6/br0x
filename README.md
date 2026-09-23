@@ -1,6 +1,8 @@
 # br0x
 
-br0x is a fast browser for Linux. It uses Rust, GTK4, and WebKitGTK. It targets low memory use and quick startup.
+<img src="packaging/logo.jpg" alt="br0x logo: a blue ring with a parked-tab gap on dark charcoal" width="128">
+
+br0x is a minimal browser for Linux. It uses Rust, GTK4, and WebKitGTK. It runs less on purpose: idle tabs release their memory, trackers are refused before they load, and your data stays on your machine.
 
 ## Goals
 
@@ -52,7 +54,14 @@ br0x is a fast browser for Linux. It uses Rust, GTK4, and WebKitGTK. It targets 
 | Alt+Enter | Open address in new tab |
 | Ctrl+Q | Quit |
 
-## Quick start
+## Install
+
+- Arch (AUR): `yay -S br0x` (ships `br0x`, a launcher entry, and an icon).
+- Release tarball: download `br0x-<version>-x86_64.tar.gz` from
+  GitHub Releases, then `./install.sh --prefix ~/.local`.
+  Needs `gtk4`, `libadwaita`, and `webkitgtk-6.0` from your distro.
+- Flatpak: `flatpak-builder --force-clean build-dir .flatpak/org.br0x.Browser.yml`.
+- From source: install deps, then `./scripts/install.sh` for a launcher entry.
 
 Install deps on Arch:
 
@@ -62,7 +71,7 @@ sudo pacman -S --needed base-devel pkgconf gtk4 libadwaita webkitgtk-6.0 rustup 
 rustup default stable
 ```
 
-Run:
+Run from source:
 
 ```sh
 cargo run --release -p br0x-shell-gtk
@@ -85,6 +94,8 @@ pages once instead of once per process.
 - `crates/br0x-core`: policy, lifecycle, session store, blocker, sampler. No GTK code here.
 - `crates/br0x-shell-gtk`: GTK4 window, tabs, address bar, park wiring. Calls `br0x-core`.
 - `docs/adr/`: architecture decisions.
+- `packaging/`: desktop entry, app metadata, and icon.
+- `PKGBUILD`: AUR package for Arch installs.
 - `.flatpak/`: Flatpak manifest for release builds.
 
 ## Contributing

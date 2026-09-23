@@ -8,14 +8,17 @@
   - Hairline rails at the content edges and noise at 1.2%: borrowed structure from zed.dev, kept because it holds the page together.
   - Headings are upright and white. No italic display type and no tinted headline, which is what kept this reading as zed.dev.
   - Cycling demo window with progress bar and dot controls: cursor.com/cli shows the product moving instead of describing it.
+  - The mark is logo.jpg: a blue ring with a parked-tab gap on dark charcoal. It sits in the nav, the hero, and the install section, and the favicon.
   - Dials: ENERGY 2 / RHYTHM 3 / MOTION 2. Design Read: product page for Linux users who count megabytes, in a tab-strip editorial style.
+  - Copy sells less: less memory, less noise, less chrome, less leaving the machine.
 -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>br0x: a Linux browser that parks idle tabs</title>
-<meta name="description" content="br0x is a Rust, GTK4, and WebKitGTK browser for Linux. Idle tabs release their web process, a base block list filters trackers locally, and nothing leaves the machine.">
+<title>br0x: the minimal Linux browser</title>
+<meta name="description" content="br0x is a minimal browser for Linux. Idle tabs release their memory, trackers are refused before they load, and your data stays on your machine.">
+<link rel="icon" type="image/jpeg" href="logo.jpg">
 <style>
 :root{
   color-scheme:dark;
@@ -79,6 +82,9 @@ img,svg{max-width:100%}
 .site-header.stuck{background:rgba(18,19,22,.86);backdrop-filter:blur(12px)}
 .nav{display:flex;align-items:center;gap:4px;height:56px}
 .wordmark{font-family:var(--mono);font-weight:600;font-size:15px;letter-spacing:-.02em;color:var(--text);margin-right:auto;display:inline-flex;align-items:center}
+.wordmark .mark{width:18px;height:18px;flex:none;margin-right:8px}
+.hero-mark{width:88px;height:88px;display:block;margin:0 auto 22px}
+.install-mark{width:96px;height:96px;display:block;margin:0 auto 20px}
 .nav-links{display:flex;align-items:center;gap:2px}
 .nav-links a.page{color:var(--muted);font-size:13px;padding:6px 10px;min-height:34px;display:inline-flex;align-items:center;transition:color .12s ease,background-color .12s ease}
 .nav-links a.page:hover{color:var(--text);background:rgba(255,255,255,.05)}
@@ -295,7 +301,7 @@ footer{border-top:1px solid var(--line);padding:32px 0 42px}
 
 <header class="site-header" id="siteHeader">
   <div class="shell nav">
-    <a class="wordmark" href="#top" aria-label="br0x home">br<span class="z">0</span>x</a>
+    <a class="wordmark" href="#top" aria-label="br0x home"><img class="mark" src="logo.jpg" alt="" width="18" height="18">br<span class="z">0</span>x</a>
     <button type="button" class="menu-toggle" id="menuBtn" aria-expanded="false" aria-controls="navLinks" aria-label="Open menu"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 4h12M2 8h12M2 12h12"/></svg></button>
     <nav class="nav-links" id="navLinks" aria-label="Sections">
       <a class="page" href="#memory">Memory</a>
@@ -318,11 +324,12 @@ footer{border-top:1px solid var(--line);padding:32px 0 42px}
 
 <main id="main" tabindex="-1">
 <div id="top" class="shell hero">
+  <img class="hero-mark" src="logo.jpg" alt="br0x logo: a blue ring with a parked-tab gap on dark charcoal" width="88" height="88">
   <div class="strip" aria-hidden="true">
     <span class="on"></span><span></span><span></span><span class="parked"></span><span class="parked"></span>
   </div>
-  <h1>A Linux browser that parks idle tabs</h1>
-  <p class="lede">Rust, GTK4, and WebKitGTK 6.0. Idle tabs release their web process, ads and trackers are refused before they load, and you switch search engines from the address bar mid-session.</p>
+  <h1>The minimal Linux browser</h1>
+  <p class="lede">br0x runs less on purpose. Idle tabs release their memory, trackers are refused before they load, and your history stays on your machine. Fewer processes, fewer requests, fewer settings.</p>
   <div class="cta-row">
     <a class="btn btn-primary btn-lg" href="#install"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 2v8M5 7l3 3 3-3M3 13h10"/></svg>Install from AUR<span class="kbd">I</span></a>
     <a class="btn btn-ghost btn-lg" href="https://github.com/Sachind6/br0x/blob/main/docs/BENCHMARKS.md">Read the benchmarks<span class="kbd">B</span></a>
@@ -422,17 +429,17 @@ footer{border-top:1px solid var(--line);padding:32px 0 42px}
 
 <div class="shell">
   <div class="blurbs reveal">
-    <div class="blurb"><h2>Memory</h2><p>Ten example.com tabs measured 731 MB median PSS, roughly half of Brave 151 and under Firefox 153.</p></div>
-    <div class="blurb"><h2>Ads and trackers</h2><p>A base block list compiles at startup and attaches to every view, so ad and tracker requests are refused before a connection opens.</p></div>
-    <div class="blurb"><h2>Search engines</h2><p>Six engines ship in the build, and the address bar carries a picker so you switch one mid-session.</p></div>
-    <div class="blurb"><h2>No telemetry</h2><p>No account and no telemetry. History, bookmarks, and sessions stay in local files under your data home.</p></div>
+    <div class="blurb"><h2>Less memory</h2><p>Ten tabs measured 731 MB median PSS, roughly half of Brave 151 and under Firefox 153. Idle tabs hold no live page until you return.</p></div>
+    <div class="blurb"><h2>Less noise</h2><p>A short block list compiles at startup and attaches to every view, so ad and tracker requests are refused before a connection opens.</p></div>
+    <div class="blurb"><h2>Less chrome</h2><p>One native bar carries search, history suggestions, and a six-engine picker. No settings maze and no second start page to manage.</p></div>
+    <div class="blurb"><h2>Less leaving your machine</h2><p>No account and no telemetry. History, bookmarks, and sessions stay in local files under your data home.</p></div>
   </div>
 </div>
 
 <section class="shell stats" id="memory">
   <div class="head reveal">
-    <p class="kicker">memory · measured</p>
-    <h2 class="sec">Ten tabs, about half the memory</h2>
+    <p class="kicker">minimal · measured</p>
+    <h2 class="sec">Less browser per tab</h2>
     <p class="sub">Proportional set size of the full process tree, three trials per cell, one sampler for every browser. Light pages only, so this measures per-tab overhead rather than heavy web apps.</p>
   </div>
   <div class="bars reveal" id="bars">
@@ -472,8 +479,8 @@ footer{border-top:1px solid var(--line);padding:32px 0 42px}
     <span class="node node-l" aria-hidden="true"></span><span class="node node-r" aria-hidden="true"></span>
     <div class="shell band-grid reveal">
       <div>
-        <h3>Idle tabs release their web process</h3>
-        <p>Tabs that are audible, loading, blank, pinned, or recently restored stay exempt, so nothing you can hear or just opened gets parked.</p>
+        <h3>Idle tabs hold no live page</h3>
+        <p>Leave a tab alone and br0x releases its web process. The tab stays listed, and one click restores it. Audible, loading, blank, pinned, and just-restored tabs stay exempt.</p>
         <a class="quiet" href="https://github.com/Sachind6/br0x/blob/main/docs/adr/0002-freeze-first.md">Read the freeze-first decision<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8h10M9 4l4 4-4 4"/></svg></a>
       </div>
       <div class="media">
@@ -492,8 +499,8 @@ footer{border-top:1px solid var(--line);padding:32px 0 42px}
     <span class="node node-l" aria-hidden="true"></span><span class="node node-r" aria-hidden="true"></span>
     <div class="shell band-grid reveal">
       <div>
-        <h3>Switch search engines on the fly</h3>
-        <p>Six engines ship in the build: DuckDuckGo, Google, Brave, Bing, Startpage, and Wikipedia. The picker sits in the address bar, and the engine you choose applies to the next search with no restart and no settings page.</p>
+        <h3>One bar, six engines</h3>
+        <p>DuckDuckGo, Google, Brave, Bing, Startpage, and Wikipedia ship in the build. The picker sits in the address bar, and your choice applies to the next search with no restart and no settings page.</p>
         <a class="quiet" href="https://github.com/Sachind6/br0x/blob/main/README.md">See the engine list<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8h10M9 4l4 4-4 4"/></svg></a>
       </div>
       <div class="media">
@@ -514,8 +521,8 @@ footer{border-top:1px solid var(--line);padding:32px 0 42px}
     <span class="node node-l" aria-hidden="true"></span><span class="node node-r" aria-hidden="true"></span>
     <div class="shell band-grid reveal">
       <div>
-        <h3>Ads and trackers stop before pages load</h3>
-        <p>One base block list compiles at startup and attaches to every view, so ad and tracker requests are refused before a connection opens. Filtering runs on your machine rather than through a remote service.</p>
+        <h3>Trackers stop before pages load</h3>
+        <p>One short list compiles once and attaches to every view, so ad and tracker requests are refused before a connection opens. Filtering runs on your machine through no remote service.</p>
         <a class="quiet" href="https://github.com/Sachind6/br0x/blob/main/crates/br0x-shell-gtk/src/main.rs">Read the filter in the source<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8h10M9 4l4 4-4 4"/></svg></a>
       </div>
       <div class="media">
@@ -535,8 +542,8 @@ footer{border-top:1px solid var(--line);padding:32px 0 42px}
     <span class="node node-l" aria-hidden="true"></span><span class="node node-r" aria-hidden="true"></span>
     <div class="shell band-grid reveal">
       <div>
-        <h3>Restore sessions, load one tab</h3>
-        <p>Your open tabs survive a restart or a crash. At startup only the selected tab loads, and the rest stay parked until you visit them.</p>
+        <h3>Restart loads one tab</h3>
+        <p>Open tabs survive a restart or a crash. Only the selected tab loads, and the rest stay parked until you visit them.</p>
         <a class="quiet" href="https://github.com/Sachind6/br0x/blob/main/docs/BENCHMARKS.md">Check the startup numbers<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8h10M9 4l4 4-4 4"/></svg></a>
       </div>
       <div class="media">
@@ -555,13 +562,8 @@ footer{border-top:1px solid var(--line);padding:32px 0 42px}
 <section class="install" id="install">
   <span class="node node-l" aria-hidden="true"></span><span class="node node-r" aria-hidden="true"></span>
   <div class="shell">
-    <pre class="ascii" aria-hidden="true">██████╗ ██████╗  ██████╗ ██╗  ██╗
-██╔══██╗██╔══██╗██╔═████╗╚██╗██╔╝
-██████╔╝██████╔╝██║██╔██║ ╚███╔╝
-██╔══██╗██╔══██╗████╔╝██║ ██╔██╗
-██████╔╝██║  ██║╚██████╔╝██╔╝ ██╗
-╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝</pre>
-    <h2>Install br0x on Arch</h2>
+    <img class="install-mark" src="logo.jpg" alt="br0x logo: a blue ring with a parked-tab gap on dark charcoal" width="96" height="96">
+    <h2>Download less browser</h2>
     <div class="cmd">
       <code id="cmdText">yay -S br0x</code>
       <button type="button" id="copyBtn" aria-label="Copy the install command">
@@ -569,7 +571,7 @@ footer{border-top:1px solid var(--line);padding:32px 0 42px}
         <svg class="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8.5l3.2 3.2L13 5"/></svg>
       </button>
     </div>
-    <p class="note">Release tarballs live on <a href="https://github.com/Sachind6/br0x/releases">GitHub Releases</a>, and the source builds with <kbd>cargo run --release -p br0x-shell-gtk</kbd> after <kbd>sudo pacman -S --needed base-devel pkgconf gtk4 libadwaita webkitgtk-6.0 rustup</kbd>. Media pages need the GStreamer packages, or the web process exits when audio starts.</p>
+    <p class="note">One package, one binary, one launcher entry. Release tarballs live on <a href="https://github.com/Sachind6/br0x/releases">GitHub Releases</a>, and the source builds with <kbd>cargo run --release -p br0x-shell-gtk</kbd> after <kbd>sudo pacman -S --needed base-devel pkgconf gtk4 libadwaita webkitgtk-6.0 rustup</kbd>. Media pages need the GStreamer packages, or the web process exits when audio starts.</p>
   </div>
 </section>
 </main>
@@ -578,7 +580,7 @@ footer{border-top:1px solid var(--line);padding:32px 0 42px}
   <div class="shell foot">
     <div>
       <a class="brand" href="#top">br<span class="z">0</span>x</a>
-      <p>A fast Linux browser in Rust, GTK4, and WebKitGTK 6.0. No account, no telemetry, offline first.</p>
+      <p>A minimal Linux browser: fewer processes, fewer requests, fewer settings. No account, no telemetry, offline first.</p>
     </div>
     <div><h4>Project</h4><a href="https://github.com/Sachind6/br0x">Source</a><a href="https://github.com/Sachind6/br0x/blob/main/CONTRIBUTING.md">Contributing</a><a href="https://github.com/Sachind6/br0x/blob/main/LICENSE">License</a></div>
     <div><h4>Docs</h4><a href="https://github.com/Sachind6/br0x/blob/main/docs/BENCHMARKS.md">Benchmarks</a><a href="https://github.com/Sachind6/br0x/blob/main/docs/adr/0001-webkitgtk.md">WebKit decision</a><a href="https://github.com/Sachind6/br0x/blob/main/README.md">Readme</a></div>
