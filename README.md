@@ -66,7 +66,15 @@ br0x is a minimal browser for Linux. It uses Rust, GTK4, and WebKitGTK. It runs 
 - Arch (AUR): `yay -S br0x`, once AUR registration reopens and the package is submitted.
 - Release tarball: download `br0x-<version>-x86_64.tar.gz` from
   GitHub Releases, then `./install.sh --prefix ~/.local`.
-  Needs `gtk4`, `libadwaita`, and `webkitgtk-6.0` from your distro.
+  The bundled binary is built for Arch; other distros should build from source.
+- Other distros: install the GTK dev packages, clone, and run the installer.
+  Fedora: `sudo dnf install gtk4-devel libadwaita-devel webkitgtk6.0-devel`.
+  Ubuntu's system GTK is older than this codebase needs, so Ubuntu users
+  should take the Flatpak build below instead.
+  ```sh
+  git clone https://github.com/SachinD6/br0x.git
+  cd br0x && ./scripts/install.sh
+  ```
 - Flatpak: `flatpak-builder --force-clean build-dir .flatpak/org.br0x.Browser.yml`.
 - From source: install deps, then `./scripts/install.sh` for a launcher entry.
 

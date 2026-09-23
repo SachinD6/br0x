@@ -85,6 +85,8 @@ img,svg{max-width:100%}
 .wordmark .mark{width:18px;height:18px;flex:none;margin-right:8px}
 .hero-mark{width:88px;height:88px;display:block;margin:0 auto 22px}
 .install-mark{width:96px;height:96px;display:block;margin:0 auto 20px}
+.cmd-label{font-family:var(--mono);font-size:11.5px;color:var(--faint);margin:18px 0 8px}
+.cmd + .cmd-label{margin-top:20px}
 .nav-links{display:flex;align-items:center;gap:2px}
 .nav-links a.page{color:var(--muted);font-size:13px;padding:6px 10px;min-height:34px;display:inline-flex;align-items:center;transition:color .12s ease,background-color .12s ease}
 .nav-links a.page:hover{color:var(--text);background:rgba(255,255,255,.05)}
@@ -564,6 +566,7 @@ footer{border-top:1px solid var(--line);padding:32px 0 42px}
   <div class="shell">
     <img class="install-mark" src="logo.jpg" alt="br0x logo: a blue ring with a parked-tab gap on dark charcoal" width="96" height="96">
     <h2>Download less browser</h2>
+    <p class="cmd-label">Arch: add the repo, then install</p>
     <div class="cmd">
       <code id="cmdText">printf '[br0x]\nSigLevel = Never\nServer = https://github.com/SachinD6/br0x/releases/download/pacman\n' | sudo tee -a /etc/pacman.conf</code>
       <button type="button" id="copyBtn" aria-label="Copy the install command">
@@ -571,7 +574,11 @@ footer{border-top:1px solid var(--line);padding:32px 0 42px}
         <svg class="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8.5l3.2 3.2L13 5"/></svg>
       </button>
     </div>
-    <p class="note">Then <kbd>sudo pacman -Sy br0x</kbd>: one package, one binary, one launcher entry. Prefer a tarball? They live on <a href="https://github.com/SachinD6/br0x/releases">GitHub Releases</a>. An AUR package follows once AUR registration reopens. Media pages need the GStreamer packages, or the web process exits when audio starts.</p>
+    <p class="cmd-label">Other distros: build from source</p>
+    <div class="cmd">
+      <code>git clone https://github.com/SachinD6/br0x.git && cd br0x && ./scripts/install.sh</code>
+    </div>
+    <p class="note">Arch users then run <kbd>sudo pacman -Sy br0x</kbd>. Other distros need the GTK dev packages first — Fedora: <kbd>sudo dnf install gtk4-devel libadwaita-devel webkitgtk6.0-devel</kbd> — and Ubuntu users should take the <a href="https://github.com/SachinD6/br0x#install">Flatpak build</a> instead, since Ubuntu's system GTK is older than this codebase needs. Release tarballs live on <a href="https://github.com/SachinD6/br0x/releases">GitHub Releases</a>, and an AUR package follows once AUR registration reopens. Media pages need the GStreamer packages, or the web process exits when audio starts.</p>
   </div>
 </section>
 </main>
