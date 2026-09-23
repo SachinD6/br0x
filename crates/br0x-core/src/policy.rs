@@ -4,18 +4,36 @@
 use crate::tab::{Action, Exemption, PolicyParams, SysState, TabId, TabSnapshot};
 
 /// One sweep over background tabs. The shell calls this on a 5s tick
-/// and applies freeze/park to real WebViews. Pure, no I/O.
+/// and applies freeze/park/sleep to real WebViews. Pure, no I/O.
 pub fn sweep(tabs: &[TabSnapshot], sys: &SysState) -> Vec<(TabId, Action)> {
     tabs.iter().map(|t| (t.id, decide(t, sys))).filter(|(_, a)| *a != Action::Keep).collect()
 }
 
+/// Wall-clock idle time before Sleep. Sleep fires without pressure.
+pub const DEFAULT_SLEEP_SECS: u64 = 1800;
+
 fn bucket_params(tab_count: usize) -> PolicyParams {
     if tab_count <= 5 {
-        PolicyParams { standby_secs: 30, freeze_secs: 300, park_secs: 900 }
+        PolicyParams {
+            standby_secs: 30,
+            freeze_secs: 300,
+            park_secs: 900,
+            sleep_secs: DEFAULT_SLEEP_SECS,
+        }
     } else if tab_count <= 15 {
-        PolicyParams { standby_secs: 30, freeze_secs: 120, park_secs: 300 }
+        PolicyParams {
+            standby_secs: 30,
+            freeze_secs: 120,
+            park_secs: 300,
+            sleep_secs: DEFAULT_SLEEP_SECS,
+        }
     } else {
-        PolicyParams { standby_secs: 15, freeze_secs: 60, park_secs: 180 }
+        PolicyParams {
+            standby_secs: 15,
+            freeze_secs: 60,
+            park_secs: 180,
+            sleep_secs: DEFAULT_SLEEP_SECS,
+        }
     }
 }
 
@@ -84,19 +102,35 @@ fn scaled(base: u64, scale: f64) -> u64 {
 
 /// Pure decision. The caller passes a snapshot and obeys the action.
 pub fn decide(tab: &TabSnapshot, sys: &SysState) -> Action {
-    let base = bucket_params(sys.tab_count);
-    let scale = pressure_scale(sys.mem_used_percent);
-    let freeze_at = scaled(base.freeze_secs, scale);
-    let park_at = scaled(base.park_secs, scale);
-    decide_at(tab, sys, freeze_at, park_at)
+    decide_with_params(tab, sys, &bucket_params(sys.tab_count))
 }
 
-fn decide_at(tab: &TabSnapshot, sys: &SysState, freeze_at: u64, park_at: u64) -> Action {
+/// Decision with caller-supplied params (e.g. custom sleep threshold).
+/// Freeze/park scale with pressure; sleep stays wall-clock.
+pub fn decide_with_params(tab: &TabSnapshot, sys: &SysState, params: &PolicyParams) -> Action {
+    let scale = pressure_scale(sys.mem_used_percent);
+    let freeze_at = scaled(params.freeze_secs, scale);
+    let park_at = scaled(params.park_secs, scale);
+    decide_at(tab, sys, freeze_at, park_at, params.sleep_secs)
+}
+
+fn decide_at(
+    tab: &TabSnapshot,
+    sys: &SysState,
+    freeze_at: u64,
+    park_at: u64,
+    sleep_at: u64,
+) -> Action {
     if blocks_freeze(tab) {
         return Action::Keep;
     }
     if is_critical_park(tab, sys) {
         return Action::Park;
+    }
+    // Critical park precedes sleep; sleep precedes timed park so
+    // long-idle tabs report sleeping while pressure still parks first.
+    if tab.last_active_secs_ago >= sleep_at && !blocks_park(tab) {
+        return Action::Sleep;
     }
     if tab.last_active_secs_ago >= park_at && !blocks_park(tab) {
         return Action::Park;
@@ -226,5 +260,94 @@ mod tests {
         t.audible = true;
         let busy = SysState { tab_count: 9, mem_used_percent: 99.0 };
         assert_eq!(decide(&t, &busy), Action::Keep);
+    }
+
+    #[test]
+    fn sleep_default_is_1800() {
+        assert_eq!(DEFAULT_SLEEP_SECS, 1800);
+        assert_eq!(describe().sleep_secs, 1800);
+    }
+
+    #[test]
+    fn sleep_threshold_boundary() {
+        assert_eq!(decide(&snap(1799), &sys()), Action::Park);
+        assert_eq!(decide(&snap(1800), &sys()), Action::Sleep);
+        assert_eq!(decide(&snap(1801), &sys()), Action::Sleep);
+    }
+
+    #[test]
+    fn sleep_threshold_is_configurable() {
+        let params =
+            PolicyParams { standby_secs: 30, freeze_secs: 120, park_secs: 300, sleep_secs: 60 };
+        assert_eq!(decide_with_params(&snap(59), &sys(), &params), Action::Keep);
+        assert_eq!(decide_with_params(&snap(60), &sys(), &params), Action::Sleep);
+        assert_eq!(decide_with_params(&snap(5000), &sys(), &params), Action::Sleep);
+    }
+
+    #[test]
+    fn audible_blocks_sleep() {
+        let mut t = snap(5000);
+        t.audible = true;
+        assert_eq!(decide(&t, &sys()), Action::Keep);
+        assert!(list_exemptions(&t).contains(&Exemption::Audible));
+    }
+
+    #[test]
+    fn capturing_blocks_sleep() {
+        let mut t = snap(5000);
+        t.capturing = true;
+        assert_eq!(decide(&t, &sys()), Action::Keep);
+        assert!(list_exemptions(&t).contains(&Exemption::Capturing));
+    }
+
+    #[test]
+    fn downloading_blocks_sleep_but_allows_freeze() {
+        let mut t = snap(5000);
+        t.downloading = true;
+        assert_eq!(decide(&t, &sys()), Action::Freeze);
+        assert!(list_exemptions(&t).contains(&Exemption::Downloading));
+    }
+
+    #[test]
+    fn dirty_form_blocks_sleep_but_allows_freeze() {
+        let mut t = snap(5000);
+        t.form_dirty = true;
+        assert_eq!(decide(&t, &sys()), Action::Freeze);
+        assert!(list_exemptions(&t).contains(&Exemption::FormDirty));
+    }
+
+    #[test]
+    fn pinned_blocks_sleep_but_allows_freeze() {
+        let mut t = snap(5000);
+        t.pinned = true;
+        assert_eq!(decide(&t, &sys()), Action::Freeze);
+        assert!(list_exemptions(&t).contains(&Exemption::Pinned));
+    }
+
+    #[test]
+    fn keep_alive_blocks_sleep_but_allows_freeze() {
+        let mut t = snap(5000);
+        t.keep_alive = true;
+        assert_eq!(decide(&t, &sys()), Action::Freeze);
+        assert!(list_exemptions(&t).contains(&Exemption::KeepAlive));
+    }
+
+    #[test]
+    fn recently_restored_blocks_sleep_but_allows_freeze() {
+        let mut t = snap(5000);
+        t.restored_secs_ago = Some(10);
+        assert_eq!(decide(&t, &sys()), Action::Freeze);
+        assert!(list_exemptions(&t).contains(&Exemption::RecentlyRestored));
+    }
+
+    #[test]
+    fn sleep_beats_timed_park_without_pressure() {
+        assert_eq!(decide(&snap(5000), &sys()), Action::Sleep);
+    }
+
+    #[test]
+    fn critical_park_beats_sleep_under_pressure() {
+        let busy = SysState { tab_count: 9, mem_used_percent: 90.0 };
+        assert_eq!(decide(&snap(5000), &busy), Action::Park);
     }
 }

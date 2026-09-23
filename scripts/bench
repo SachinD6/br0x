@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""Drive br0x over its bench socket (JSON lines on a Unix socket).
+
+Usage: bench [--socket PATH] <command> [args]
+  open <url>           open an isolated bench tab, prints its id
+  wait <id>            block until the tab reports loaded
+  text <id>            print the tab's visible text
+  shot <id> <path>     best-effort PNG snapshot (errors when unavailable)
+  click <id> <selector> click a CSS selector in the tab
+  probe                print window state (tabs, visibility, selection)
+  close <id|all>       close one bench tab, or every bench tab
+  tabs                 list open bench tabs
+
+The server only listens when the browser runs with BR0X_BENCH=1.
+Default socket: $XDG_STATE_HOME/br0x/bench.sock, else
+~/.local/state/br0x/bench.sock.
+"""
+import json
+import os
+import socket
+import sys
+
+DEFAULT_SOCKET = os.path.join(
+    os.environ.get("XDG_STATE_HOME")
+    or os.path.join(os.path.expanduser("~"), ".local", "state"),
+    "br0x",
+    "bench.sock",
+)
+
+
+def send(sock_path, payload):
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        try:
+            client.connect(sock_path)
+        except OSError as e:
+            print(f"bench: cannot connect to {sock_path}: {e}", file=sys.stderr)
+            print("bench: is br0x running with BR0X_BENCH=1?", file=sys.stderr)
+            return 2
+        client.sendall((json.dumps(payload) + "\n").encode())
+        with client.makefile() as stream:
+            line = stream.readline()
+    if not line:
+        print("bench: server closed the connection", file=sys.stderr)
+        return 1
+    try:
+        reply = json.loads(line)
+    except json.JSONDecodeError:
+        print(f"bench: bad reply: {line.strip()}", file=sys.stderr)
+        return 1
+    if not reply.get("ok", False):
+        print(f"bench: error: {reply.get('error', 'unknown')}", file=sys.stderr)
+        return 1
+    if "text" in reply:
+        print(reply["text"])
+    elif "tabs" in reply:
+        for tab in reply["tabs"]:
+            loaded = "loaded" if tab.get("loaded") else "loading"
+            print(f"{tab['id']} {loaded} {tab.get('url', '')}")
+    elif "state" in reply:
+        state = reply["state"]
+        print(
+            f"tabs={state.get('tabs')} "
+            f"visible={state.get('visible')} "
+            f"selected={state.get('selected')}"
+        )
+    elif "id" in reply:
+        print(reply["id"])
+    else:
+        print("ok")
+    return 0
+
+
+def parse_id(text):
+    try:
+        return int(text)
+    except ValueError:
+        print(f"bench: bad tab id: {text!r}", file=sys.stderr)
+        sys.exit(2)
+
+
+def main():
+    args = sys.argv[1:]
+    sock_path = os.environ.get("BR0X_BENCH_SOCK", DEFAULT_SOCKET)
+    if len(args) >= 2 and args[0] == "--socket":
+        sock_path = args[1]
+        args = args[2:]
+    if not args or args[0] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0 if args else 2
+    cmd, rest = args[0], args[1:]
+    if cmd == "open" and len(rest) == 1:
+        payload = {"cmd": "open", "url": rest[0]}
+    elif cmd == "wait" and len(rest) == 1:
+        payload = {"cmd": "wait", "id": parse_id(rest[0])}
+    elif cmd == "text" and len(rest) == 1:
+        payload = {"cmd": "text", "id": parse_id(rest[0])}
+    elif cmd == "shot" and len(rest) == 2:
+        payload = {"cmd": "shot", "id": parse_id(rest[0]), "path": rest[1]}
+    elif cmd == "click" and len(rest) == 2:
+        payload = {"cmd": "click", "id": parse_id(rest[0]), "selector": rest[1]}
+    elif cmd == "probe" and not rest:
+        payload = {"cmd": "probe"}
+    elif cmd == "tabs" and not rest:
+        payload = {"cmd": "tabs"}
+    elif cmd == "close" and len(rest) == 1:
+        target = parse_id(rest[0]) if rest[0] != "all" else "all"
+        payload = {"cmd": "close", "target": target}
+    else:
+        print(f"bench: bad usage for {cmd!r}; see bench --help", file=sys.stderr)
+        return 2
+    return send(sock_path, payload)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

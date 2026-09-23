@@ -187,3 +187,22 @@ scales clearly cheaper, at the cost of the slowest startup.
   `hl.dsp.send_shortcut` Hyprland plugin protocol that this compositor only
   exposes via `hyprctl eval`, and on a 5-site heavy tab set unsuitable for a
   7 GB box. `scripts/measure.py` was used unmodified.
+
+## Re-measuring with the sleep tier
+
+Sleep slows an idle tab's timers while keeping its page; park releases the
+process. To measure each tier separately, use the same tab set and sampler
+as above (`scripts/measure.py` for PSS, fresh XDG dirs per trial), and take
+three samples per trial instead of one:
+
+1. Settle (~20 s after tabs load) — the active baseline, before any tab idles.
+2. Past the sleep timeout, before pressure parks anything — the sleeping
+   figure. Confirm no tab shows `• Parked` before sampling.
+3. Under memory pressure, once background tabs park — the parked figure.
+
+Keep the settle time, tab set, and sampler identical across all three
+samples so the only difference is the lifecycle tier. Report all three
+numbers per trial (no medians across tiers); sleep and park are different
+states, not repeated measures of one. The `scripts/bench` harness
+(`BR0X_BENCH=1`, `bench tabs` / `bench probe`) can confirm which tier each
+tab is in at sample time without stealing window focus.

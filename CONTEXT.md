@@ -3,7 +3,10 @@
 ## Glossary
 
 - Tab: a single page a user opens, views, switches between, and closes.
-- Tab state: lifecycle stage of a tab. Values: active, standby, idle, parked.
+- Tab state: lifecycle stage of a tab. Values: active, standby, idle, sleeping, parked.
+  Sleeping releases the tab's web process after a long idle period even without
+  memory pressure; parked does the same under pressure. Both keep the tab listed
+  and restore on click.
 - Policy: rule set that decides when a tab changes state.
 - Exemption: user visible reason that stops freeze or park, such as sound, a call, a download, unsaved input, or a pin.
 - Freeze: reversible pause of background work in a tab that keeps the page in memory.

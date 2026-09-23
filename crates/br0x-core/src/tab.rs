@@ -14,6 +14,8 @@ pub enum TabState {
     Standby,
     Idle,
     Parked,
+    /// Time-based release without pressure. Same mechanism as Parked.
+    Sleeping,
 }
 
 /// What the policy wants the caller to do.
@@ -22,6 +24,8 @@ pub enum Action {
     Keep,
     Freeze,
     Park,
+    /// Release the web process like Park, reported as sleeping.
+    Sleep,
 }
 
 /// User visible reason that blocks park. Only audible and capturing tabs
@@ -66,4 +70,6 @@ pub struct PolicyParams {
     pub standby_secs: u64,
     pub freeze_secs: u64,
     pub park_secs: u64,
+    /// Wall-clock idle time before Sleep. Not pressure-scaled.
+    pub sleep_secs: u64,
 }

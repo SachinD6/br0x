@@ -30,6 +30,13 @@ br0x is a minimal browser for Linux. It uses Rust, GTK4, and WebKitGTK. It runs 
 - `window.open` and `target=_blank` open real tabs
 - Session save and restore. Only the selected tab loads at startup, the rest stay parked until you visit them
 - Adaptive park policy: idle background tabs release their web process under memory pressure. Tabs that are audible, loading, blank, pinned, or recently restored are exempt. Parked tabs are marked `• Parked`
+- Sleep tier: idle tabs slow their timers first and keep the page; only pressure parks them
+- Hide-anything: dismiss any element for the site, and it stays hidden
+- Reading mode: articles as one text column, no page chrome
+- Tab palette and sidebar tabs: jump from the keyboard, or list tabs vertically
+- Passwords in the system keychain, never in a browser file; per-site shield level
+- Video pop-out: the playing video floats above your tabs
+- Script-driven testing: `scripts/bench` drives isolated tabs over a socket when br0x runs with `BR0X_BENCH=1` (see `crates/br0x-shell-gtk/BENCH_WIRING.md`)
 - Reopen closed tab (Ctrl+Shift+T, last 10)
 - Base tracker block list compiled once and attached to every view
 - Memory pressure settings on the shared web context
@@ -51,6 +58,12 @@ br0x is a minimal browser for Linux. It uses Rust, GTK4, and WebKitGTK. It runs 
 | Ctrl+Plus, Ctrl+Minus, Ctrl+0 | Zoom in, out, reset |
 | Ctrl+Tab, Ctrl+Shift+Tab | Next, previous tab |
 | Ctrl+D | Bookmark this page |
+| Ctrl+K, then type | Tab palette (open tabs first) |
+| F9 | Sidebar tabs on/off |
+| Ctrl+Shift+R | Reading mode |
+| Ctrl+Shift+H | Hide the element under the cursor |
+| Ctrl+Shift+O | Pop the playing video out |
+| Ctrl+Shift+S | Per-site shield toggle |
 | Alt+Enter | Open address in new tab |
 | Ctrl+Q | Quit |
 

@@ -558,6 +558,101 @@ footer{border-top:1px solid var(--line);padding:32px 0 42px}
       </div>
     </div>
   </div>
+
+  <div class="band">
+    <span class="node node-l" aria-hidden="true"></span><span class="node node-r" aria-hidden="true"></span>
+    <div class="shell band-grid reveal">
+      <div>
+        <h3>Tabs sleep before they park</h3>
+        <p>An idle tab first slows its timers and keeps its page. Only under pressure does br0x release the process. Less waking up, less reloading, less memory either way.</p>
+        <a class="quiet" href="https://github.com/Sachind6/br0x/blob/main/docs/BENCHMARKS.md">Re-measure with the sleep tier<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8h10M9 4l4 4-4 4"/></svg></a>
+      </div>
+      <div class="media">
+        <p class="mh">sleep tier · slow first, release later</p>
+        <div class="life">
+          <div><b>SLEEPING</b>Timers slowed, page kept<span class="st">idle minutes</span></div>
+          <div class="pk"><b>PARKED</b>Process released, tab listed<span class="st">under pressure</span></div>
+          <div><b>EXEMPT</b>Audible, pinned, just restored<span class="st">stays awake</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="band">
+    <span class="node node-l" aria-hidden="true"></span><span class="node node-r" aria-hidden="true"></span>
+    <div class="shell band-grid reveal">
+      <div>
+        <h3>Less on the page</h3>
+        <p>Hide any element that shouts, read articles without the chrome, and float the video above your tabs. The page keeps less of your attention.</p>
+        <a class="quiet" href="https://github.com/Sachind6/br0x/blob/main/README.md">See the shortcuts<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8h10M9 4l4 4-4 4"/></svg></a>
+      </div>
+      <div class="media">
+        <p class="mh">page tools · hide, read, pop out</p>
+        <div class="life">
+          <div><b>HIDE</b>Any element dismissed for the site<span class="st">stays hidden</span></div>
+          <div><b>READING</b>Article text, nothing else<span class="st">one column</span></div>
+          <div><b>POP-OUT</b>Video floats above the tabs<span class="st">keeps playing</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="band">
+    <span class="node node-l" aria-hidden="true"></span><span class="node node-r" aria-hidden="true"></span>
+    <div class="shell band-grid reveal">
+      <div>
+        <h3>Every tab within reach</h3>
+        <p>A palette jumps to any tab from the keyboard, and a sidebar lists them vertically when the strip runs out. Fewer clicks, fewer lost tabs.</p>
+        <a class="quiet" href="https://github.com/Sachind6/br0x/blob/main/README.md">See the shortcuts<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8h10M9 4l4 4-4 4"/></svg></a>
+      </div>
+      <div class="media">
+        <p class="mh">tab switching · palette and sidebar</p>
+        <div class="life">
+          <div><b>PALETTE</b>Fuzzy match across open tabs<span class="st">keyboard first</span></div>
+          <div><b>SIDEBAR</b>Vertical list beside the page<span class="st">when strips run out</span></div>
+          <div class="pk"><b>PARKED</b>Parked tabs answer too<span class="st">restores on pick</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="band">
+    <span class="node node-l" aria-hidden="true"></span><span class="node node-r" aria-hidden="true"></span>
+    <div class="shell band-grid reveal">
+      <div>
+        <h3>Secrets stay in the keyring</h3>
+        <p>Passwords live in the system keychain, never in a browser file. A per-site shield tightens blocking where you ask and relaxes where you trust.</p>
+        <a class="quiet" href="https://github.com/Sachind6/br0x/blob/main/README.md">See how secrets are kept<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8h10M9 4l4 4-4 4"/></svg></a>
+      </div>
+      <div class="media">
+        <p class="mh">trust · keychain and shield</p>
+        <div class="life">
+          <div><b>KEYCHAIN</b>Passwords in the system store<span class="st">no master file</span></div>
+          <div><b>SHIELD</b>Per-site block level<span class="st">your call</span></div>
+          <div><b>BLOCKER</b>Base list still on everywhere<span class="st">refused early</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="band">
+    <span class="node node-l" aria-hidden="true"></span><span class="node node-r" aria-hidden="true"></span>
+    <div class="shell band-grid reveal">
+      <div>
+        <h3>Drive it from a script</h3>
+        <p>An opt-in socket opens isolated tabs, waits for load, reads text, clicks, and snapshots — without touching your session or history. Benchmarks you can rerun instead of screenshots you cannot.</p>
+        <a class="quiet" href="https://github.com/Sachind6/br0x/blob/main/crates/br0x-shell-gtk/BENCH_WIRING.md">Read the wiring note<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8h10M9 4l4 4-4 4"/></svg></a>
+      </div>
+      <div class="media">
+        <p class="mh">scripts/bench · isolated tabs only</p>
+        <div class="life">
+          <div><b>OPEN</b>Isolated tab, never in history<span class="st">bench open</span></div>
+          <div><b>WAIT</b>Until the tab reports loaded<span class="st">bench wait</span></div>
+          <div><b>SHOT</b>Best-effort snapshot<span class="st">bench shot</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
 </section>
 
 <section class="install" id="install">
