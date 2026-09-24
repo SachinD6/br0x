@@ -535,7 +535,6 @@ pub fn install(display: &Display) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use br0x_core::prefs::Appearance;
 
     /// The bug this module exists to prevent: a light choice that leaves dark
     /// chrome. The painted palette must follow the pref, not the toolkit.
