@@ -1283,7 +1283,6 @@ impl Shell {
     fn palette_hits(&self, needle: &str) -> Vec<PaletteHit> {
         let query = needle.trim();
         let mut scored: Vec<(u32, u8, PaletteHit)> = Vec::new();
-        let tab_icon = "web-browser-symbolic";
         for (title, url, page) in self.all_tabs() {
             let name = if title.trim().is_empty() {
                 pages::display_domain(&url).to_owned()
@@ -1292,7 +1291,6 @@ impl Shell {
             };
             if let Some(score) = fuzzy_score(query, &name).or_else(|| fuzzy_score(query, &url)) {
                 scored.push((score, 0, PaletteHit::Tab { title: name, url, page }));
-                let _ = tab_icon;
             }
         }
         if !query.is_empty() {
