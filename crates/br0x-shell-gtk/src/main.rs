@@ -280,7 +280,7 @@ fn history_row(url: &str, title: &str, domain: &str, time: &str) -> String {
         title = html_escape(title),
         domain = html_escape(domain),
         haystack = html_escape(&haystack),
-        fav = favicon_img(domain, &letter),
+        fav = avatar_tile(&letter),
         time = html_escape(time),
     )
 }
@@ -432,7 +432,7 @@ fn history_html(
       padding: 11px 15px;
       color: inherit;
       font: inherit;
-      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
     }}
     .filter-box input:focus {{
       outline: none;
@@ -491,14 +491,6 @@ fn history_html(
     }}
     .fav-letter {{
       line-height: 1;
-    }}
-    .fav-img {{
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      background-color: light-dark(#ffffff, #242424);
     }}
     td.col-when {{
       color: light-dark(#757575, #9e9e9e);
@@ -856,7 +848,7 @@ fn site_card(url: &str, name: &str, key: Option<&str>, class: &str) -> String {
         class = html_escape(class),
         url = html_escape(url),
         key_attr = key_attr,
-        fav = favicon_img(domain, &letter),
+        fav = avatar_tile(&letter),
         name = html_escape(name),
         domain = html_escape(domain),
         key_badge = key_badge,
@@ -872,12 +864,11 @@ fn frequent_name(visit: &Visit) -> String {
     }
 }
 
-/// Favicon via a lightweight icon service, with a letter fallback when the
-/// image fails to load (offline or unknown host).
-fn favicon_img(domain: &str, letter: &str) -> String {
+/// Local letter tile. Favicons once came from a remote icon service, which
+/// disclosed every visited domain to a third party on each new tab.
+fn avatar_tile(letter: &str) -> String {
     format!(
-        r#"<span class="fav" aria-hidden="true"><span class="fav-letter">{letter}</span><img class="fav-img" src="https://icons.duckduckgo.com/ip3/{domain}.ico" alt="" loading="lazy" onerror="this.remove()"></span>"#,
-        domain = html_escape(domain),
+        r#"<span class="fav" aria-hidden="true"><span class="fav-letter">{letter}</span></span>"#,
         letter = html_escape(letter),
     )
 }
@@ -1004,7 +995,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
       color: inherit;
       font: inherit;
       font-size: 15px;
-      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 12px 32px rgba(15, 23, 42, 0.08);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 12px 32px rgba(0, 0, 0, 0.08);
       transition: border-color 150ms ease, box-shadow 150ms ease;
     }}
     .engine-badge {{
@@ -1015,7 +1006,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
       font-size: 11px;
       font-weight: 600;
       letter-spacing: 0.2px;
-      color: light-dark(#8a8f9c, #8e8e8e);
+      color: light-dark(#5f6672, #a9a9a9);
       background: light-dark(#f1f4f9, #3a3a3a);
       border: 1px solid light-dark(#e2e5ec, #4a4a4a);
       border-radius: 9999px;
@@ -1029,7 +1020,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
       box-shadow: 0 0 0 3px color-mix(in srgb, AccentColor 16%, transparent);
     }}
     .search-field::placeholder {{
-      color: light-dark(#9e9e9e, #757575);
+      color: light-dark(#767676, #a9a9a9);
     }}
     .grid {{
       display: grid;
@@ -1069,7 +1060,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
     a.card:hover {{
       transform: translateY(-1px);
       border-color: light-dark(#c3ccd9, #4a4a4a);
-      box-shadow: 0 6px 18px rgba(15, 23, 42, 0.1);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.1);
     }}
     .section-count {{
       font-weight: 600;
@@ -1100,7 +1091,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.6px;
-      color: light-dark(#8a8f9c, #8e8e8e);
+      color: light-dark(#5f6672, #a9a9a9);
       margin: 26px 0 10px;
     }}
     .fav {{
@@ -1120,14 +1111,6 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
     }}
     .fav-letter {{
       line-height: 1;
-    }}
-    .fav-img {{
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      background-color: light-dark(#ffffff, #262626);
     }}
     .card-text {{
       display: flex;
@@ -1154,7 +1137,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
       flex: none;
       font-size: 11px;
       font-weight: 600;
-      color: light-dark(#8a8f9c, #8e8e8e);
+      color: light-dark(#5f6672, #a9a9a9);
       border: 1px solid light-dark(#e2e5ec, #3d3d3d);
       border-radius: 6px;
       padding: 1px 6px;
@@ -1175,10 +1158,10 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
       font-size: 12px;
       line-height: 1;
       cursor: pointer;
-      opacity: 0;
+      visibility: hidden;
     }}
     .pin:hover .pin-remove {{
-      opacity: 1;
+      visibility: visible;
     }}
     button.add-card {{
       display: flex;
@@ -1201,7 +1184,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
     }}
     footer {{
       margin-top: 40px;
-      color: light-dark(#9e9e9e, #757575);
+      color: light-dark(#767676, #a9a9a9);
       font-size: 12px;
       display: flex;
       flex-wrap: wrap;
@@ -1233,7 +1216,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
       align-items: center;
       justify-content: center;
       padding: 20px;
-      background: rgba(0, 0, 0, 0.4);
+      background: light-dark(rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0.65));
       z-index: 50;
     }}
     .modal-backdrop.open {{
@@ -1402,13 +1385,6 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
           fl.className = 'fav-letter';
           fl.textContent = letter;
           fav.appendChild(fl);
-          var img = document.createElement('img');
-          img.className = 'fav-img';
-          img.loading = 'lazy';
-          img.alt = '';
-          img.src = 'https://icons.duckduckgo.com/ip3/' + domain + '.ico';
-          img.onerror = function() {{ this.remove(); }};
-          fav.appendChild(img);
           var text = document.createElement('span');
           text.className = 'card-text';
           var nm = document.createElement('span');
@@ -1511,9 +1487,11 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
       var typing = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
       if (typing) {{
         if (e.key === 'Escape') active.blur();
-        // Number shortcuts still work while the search box is empty.
-        if (active.value !== '' || !/^[1-6]$/.test(e.key)) return;
+        return;
       }}
+      // A modal dialog owns the keyboard while open: no shortcuts, and no
+      // focusing the search field behind it.
+      if (document.querySelector('#pin-modal.open')) return;
       if (e.key === '/') {{
         e.preventDefault();
         var input = document.getElementById('search-input');
@@ -1749,19 +1727,21 @@ fn render_suggestions(
         let stack = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
         stack.set_margin_top(4);
         stack.set_margin_bottom(4);
-        let url_label = gtk4::Label::new(Some(&visit.url));
-        url_label.set_xalign(0.0);
-        url_label.set_hexpand(true);
-        url_label.set_max_width_chars(64);
-        url_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+        // Title first, address second: the same hierarchy as open-tab rows
+        // and every browser address dropdown.
         let title_label = gtk4::Label::new(Some(&title));
         title_label.set_xalign(0.0);
         title_label.set_hexpand(true);
         title_label.set_max_width_chars(64);
         title_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
-        title_label.add_css_class("dim-label");
-        stack.append(&url_label);
+        let url_label = gtk4::Label::new(Some(&visit.url));
+        url_label.set_xalign(0.0);
+        url_label.set_hexpand(true);
+        url_label.set_max_width_chars(64);
+        url_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+        url_label.add_css_class("dim-label");
         stack.append(&title_label);
+        stack.append(&url_label);
         let row = gtk4::ListBoxRow::new();
         row.set_child(Some(&stack));
         list.append(&row);
@@ -1817,6 +1797,59 @@ fn suggest_row_count(list: &gtk4::ListBox) -> usize {
     }
     count as usize
 }
+
+/// Subsequence fuzzy score, lower is better. Matches case-insensitively in
+/// order; each skipped character costs, so prefix and tight matches win.
+/// Empty needle matches everything at zero: the zero-typing list.
+fn fuzzy_score(needle: &str, haystack: &str) -> Option<u32> {
+    let needle: Vec<char> = needle.to_lowercase().chars().collect();
+    if needle.is_empty() {
+        return Some(0);
+    }
+    let hay: Vec<char> = haystack.to_lowercase().chars().collect();
+    let mut h = 0;
+    let mut score = 0u32;
+    for (n, nc) in needle.iter().enumerate() {
+        let pos = hay[h..].iter().position(|c| c == nc)?;
+        score += pos as u32 + if n == 0 { 0 } else { 1 };
+        h += pos + 1;
+    }
+    Some(score)
+}
+
+/// One palette row: a tab to switch to, a place to open, or an action.
+#[derive(Clone)]
+enum PaletteHit {
+    Tab { title: String, url: String, page: adw::TabPage },
+    Go { title: String, url: String },
+    Action { label: String, hint: &'static str, action: &'static str },
+}
+
+/// Every palette-runnable action: label, shortcut hint, win.* action name.
+const PALETTE_ACTIONS: &[(&str, &str, &str)] = &[
+    ("New Tab", "Ctrl+T", "new-tab"),
+    ("Reopen Closed Tab", "Ctrl+Shift+T", "reopen-tab"),
+    ("Focus Mode", "Ctrl+Shift+F", "focus-mode"),
+    ("Find in Page", "Ctrl+F", "find"),
+    ("Bookmark This Page", "Ctrl+D", "bookmark-page"),
+    ("Pin Tab", "Ctrl+Shift+P", "toggle-pin"),
+    ("Reader Mode", "Ctrl+Shift+R", "reader"),
+    ("Hide Element", "Ctrl+Shift+H", "curtain-pick"),
+    ("Ad Blocker for Site", "Ctrl+Shift+S", "toggle-shield"),
+    ("Toggle Sidebar", "F9", "toggle-sidebar"),
+    ("History", "Ctrl+H", "history"),
+    ("Copy URL", "", "copy-url"),
+    ("Go Back", "Alt+Left", "back"),
+    ("Go Forward", "Alt+Right", "forward"),
+    ("Reload", "Ctrl+R", "reload"),
+    ("Zoom In", "Ctrl++", "zoom-in"),
+    ("Zoom Out", "Ctrl+-", "zoom-out"),
+    ("Reset Zoom", "Ctrl+0", "zoom-reset"),
+    ("Settings", "Ctrl+,", "settings"),
+];
+
+/// Most palette rows shown at once.
+const PALETTE_LIMIT: usize = 9;
 
 /// Lowercase host of a URI without port, path, query or fragment.
 /// Delegates to the core shield normalizer so the shell and the store agree.
@@ -2111,6 +2144,7 @@ struct Shell {
     progress: gtk4::ProgressBar,
     read_progress: gtk4::ProgressBar,
     key_btn: gtk4::Button,
+    star_btn: gtk4::Button,
     engine_btn: gtk4::MenuButton,
     find_bar: gtk4::SearchBar,
     find_entry: gtk4::SearchEntry,
@@ -2122,13 +2156,29 @@ struct Shell {
     last_sample: RefCell<Option<(Instant, br0x_core::tab::SysState)>>,
     /// Engine, frequent list and scheme the start page file was last built from.
     last_newtab: RefCell<Option<(SearchEngine, Vec<Visit>, Appearance)>>,
+    /// Address bar suggestion list, dismissed when the palette summons.
     suggest_pop: gtk4::Popover,
     sidebar_reveal: gtk4::Revealer,
+    sidebar_box: gtk4::Box,
     sidebar_pins: gtk4::FlowBox,
     sidebar_list: gtk4::ListBox,
     sidebar_head_label: gtk4::Label,
     sidebar_collapse_btn: gtk4::Button,
     header_sidebar_btn: gtk4::Button,
+    /// Reloadable provider pinning chrome surfaces to the chosen scheme.
+    scheme_css: gtk4::CssProvider,
+    toolbar: adw::ToolbarView,
+    palette_card: gtk4::Box,
+    palette_entry: gtk4::SearchEntry,
+    palette_list: gtk4::ListBox,
+    palette_store: RefCell<Vec<PaletteHit>>,
+    /// Menu rows that name the current state instead of a fixed verb.
+    pin_item: gio::MenuItem,
+    shield_item: gio::MenuItem,
+    /// Settings switches mirrored from outside (F9, rail button) so an
+    /// open window never shows the opposite of the truth.
+    settings_sidebar_row: RefCell<Option<adw::SwitchRow>>,
+    settings_rail_row: RefCell<Option<adw::SwitchRow>>,
     sidebar_pages: RefCell<Vec<adw::TabPage>>,
     sidebar_visible: RefCell<bool>,
     sidebar_rail: RefCell<bool>,
@@ -2286,6 +2336,24 @@ impl Shell {
         }));
     }
 
+    /// Menu rows that name the current state: Unpin vs Pin, blocker on or
+    /// off for the selected tab's site.
+    fn refresh_menu_labels(&self) {
+        let pinned = self.tab_view.selected_page().is_some_and(|p| p.is_pinned());
+        self.pin_item.set_label(Some(if pinned { "Unpin Tab" } else { "Pin Tab" }));
+        let domain = selected_view(&self.tab_view)
+            .and_then(|v| v.uri().map(|u| u.to_string()))
+            .map(|uri| domain_of(&uri))
+            .unwrap_or_default();
+        self.shield_item.set_label(Some(if domain.is_empty() {
+            "Blocker for This Site"
+        } else if self.blocker_active(&domain) {
+            "Blocker On for This Site"
+        } else {
+            "Blocker Off for This Site"
+        }));
+    }
+
     /// Star on/off for the current page. Internal pages cannot be saved.
     fn toggle_bookmark(self: &Rc<Self>) {
         let Some(view) = selected_view(&self.tab_view) else {
@@ -2313,6 +2381,29 @@ impl Shell {
                 eprintln!("br0x: bookmarks save failed: {e}");
             }
         }
+        self.refresh_star_button();
+    }
+
+    /// Star button mirrors the selected page: filled when saved, outline
+    /// otherwise, quiet on pages that cannot be saved.
+    fn refresh_star_button(&self) {
+        let uri = selected_view(&self.tab_view).and_then(|v| v.uri().map(|u| u.to_string()));
+        let saveable = uri.as_ref().is_some_and(|u| !is_blank_uri(u) && !u.starts_with("br0x://"));
+        let starred = saveable
+            && uri
+                .as_ref()
+                .is_some_and(|u| BookmarkStore::is_bookmarked(&self.bookmarks.borrow(), u));
+        self.star_btn.set_icon_name(if starred {
+            "starred-symbolic"
+        } else {
+            "non-starred-symbolic"
+        });
+        self.star_btn.set_tooltip_text(Some(if starred {
+            "Bookmarked — click to remove (Ctrl+D)"
+        } else {
+            "Bookmark this page (Ctrl+D)"
+        }));
+        self.star_btn.set_sensitive(saveable);
     }
 
     /// Reload tabs currently showing the start page (fresh data after an
@@ -2336,28 +2427,217 @@ impl Shell {
         }
     }
 
-    /// Open tabs matching `needle` for the palette: (title, url, page).
+    /// Every tab with its live identity: title plus real URL even when the
+    /// view sits on about:blank after a release.
+    fn all_tabs(&self) -> Vec<(String, String, adw::TabPage)> {
+        let tabs = self.tabs.borrow();
+        tabs.entries
+            .iter()
+            .map(|entry| {
+                let title = strip_state_badges(entry.page.title().as_ref());
+                // A released tab sits on about:blank: match its real URL.
+                let live = entry.view.uri().map(|uri| uri.to_string()).unwrap_or_default();
+                let url = if live.is_empty() || is_blank_uri(&live) {
+                    entry.meta.pending_url.clone().unwrap_or_default()
+                } else {
+                    live
+                };
+                (title, url, entry.page.clone())
+            })
+            .collect()
+    }
+
+    /// Open tabs matching `needle` for the address bar: (title, url, page).
     fn open_tab_hits(&self, needle: &str) -> Vec<(String, String, adw::TabPage)> {
         let query = needle.to_lowercase();
-        let tabs = self.tabs.borrow();
-        let mut out = Vec::new();
-        for entry in tabs.entries.iter() {
-            let title = strip_state_badges(entry.page.title().as_ref());
-            // A released tab sits on about:blank: match its real URL.
-            let live = entry.view.uri().map(|uri| uri.to_string()).unwrap_or_default();
-            let url = if live.is_empty() || is_blank_uri(&live) {
-                entry.meta.pending_url.clone().unwrap_or_default()
+        self.all_tabs()
+            .into_iter()
+            .filter(|(title, url, _)| {
+                title.to_lowercase().contains(&query) || url.to_lowercase().contains(&query)
+            })
+            .take(4)
+            .collect()
+    }
+
+    /// Ranked palette rows over tabs, actions, history, and bookmarks.
+    /// Empty needle lists open tabs only: the zero-typing tab switcher.
+    fn palette_hits(&self, needle: &str) -> Vec<PaletteHit> {
+        let query = needle.trim();
+        let mut scored: Vec<(u32, u8, PaletteHit)> = Vec::new();
+        for (title, url, page) in self.all_tabs() {
+            let name = if title.trim().is_empty() {
+                display_domain(&url).to_owned()
             } else {
-                live
+                title.clone()
             };
-            if title.to_lowercase().contains(&query) || url.to_lowercase().contains(&query) {
-                out.push((title, url, entry.page.clone()));
-                if out.len() >= 4 {
-                    break;
+            if let Some(score) = fuzzy_score(query, &name).or_else(|| fuzzy_score(query, &url)) {
+                scored.push((score, 0, PaletteHit::Tab { title: name, url, page }));
+            }
+        }
+        if !query.is_empty() {
+            for (label, hint, action) in PALETTE_ACTIONS {
+                if let Some(score) = fuzzy_score(query, label) {
+                    scored.push((
+                        score,
+                        1,
+                        PaletteHit::Action { label: label.to_string(), hint, action },
+                    ));
+                }
+            }
+            if let Some(history) = self.history.borrow().as_ref() {
+                for visit in history.recent(60).unwrap_or_default() {
+                    let name = if visit.title.trim().is_empty() {
+                        display_domain(&visit.url).to_owned()
+                    } else {
+                        visit.title.clone()
+                    };
+                    if let Some(score) =
+                        fuzzy_score(query, &name).or_else(|| fuzzy_score(query, &visit.url))
+                    {
+                        scored.push((score, 2, PaletteHit::Go { title: name, url: visit.url }));
+                    }
+                }
+            }
+            for mark in self.bookmarks.borrow().iter() {
+                let name = if mark.title.trim().is_empty() {
+                    mark.url.clone()
+                } else {
+                    mark.title.clone()
+                };
+                if let Some(score) =
+                    fuzzy_score(query, &name).or_else(|| fuzzy_score(query, &mark.url))
+                {
+                    scored.push((score, 2, PaletteHit::Go { title: name, url: mark.url.clone() }));
                 }
             }
         }
-        out
+        scored.sort_by_key(|s| (s.0, s.1));
+        scored.truncate(PALETTE_LIMIT);
+        let mut hits: Vec<PaletteHit> = scored.into_iter().map(|(_, _, hit)| hit).collect();
+        // The typed text stays runnable no matter how many rows match:
+        // trailing search row, never truncated away.
+        if !needle.trim().is_empty() {
+            let engine = self.prefs.borrow().engine;
+            hits.push(PaletteHit::Go {
+                title: format!("Search {} for \"{}\"", engine.name(), needle.trim()),
+                url: search::resolve(needle, engine),
+            });
+        }
+        hits
+    }
+
+    /// Render the palette rows for the current entry text.
+    fn render_palette(&self) {
+        let query = self.palette_entry.text().to_string();
+        let hits = self.palette_hits(&query);
+        self.palette_list.remove_all();
+        for hit in &hits {
+            let (name, hint) = match hit {
+                PaletteHit::Tab { title, url, .. } => (title.clone(), format!("Open tab · {url}")),
+                PaletteHit::Go { title, url } => (title.clone(), url.clone()),
+                PaletteHit::Action { label, hint, .. } => (label.clone(), hint.to_string()),
+            };
+            let stack = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+            stack.set_margin_top(5);
+            stack.set_margin_bottom(5);
+            stack.set_margin_start(12);
+            stack.set_margin_end(12);
+            let title_label = gtk4::Label::new(Some(&name));
+            title_label.set_xalign(0.0);
+            title_label.set_hexpand(true);
+            title_label.set_max_width_chars(60);
+            title_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+            let hint_label = gtk4::Label::new(Some(&hint));
+            hint_label.set_xalign(0.0);
+            hint_label.set_hexpand(true);
+            hint_label.set_max_width_chars(60);
+            hint_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+            hint_label.add_css_class("dim-label");
+            stack.append(&title_label);
+            stack.append(&hint_label);
+            let row = gtk4::ListBoxRow::new();
+            // Rows never take focus: clicks must not move it out of the
+            // entry, or the focus-leave dismiss wins the race against
+            // activation. Arrows still move the selection.
+            row.set_focusable(false);
+            row.set_child(Some(&stack));
+            self.palette_list.append(&row);
+        }
+        *self.palette_store.borrow_mut() = hits;
+        if self.palette_list.row_at_index(0).is_some() {
+            self.palette_list.select_row(self.palette_list.row_at_index(0).as_ref());
+        }
+    }
+
+    /// Run the selected palette row, the first row, or the typed text.
+    fn activate_palette(self: &Rc<Self>) {
+        let hit = {
+            let hits = self.palette_store.borrow();
+            self.palette_list
+                .selected_row()
+                .and_then(|row| usize::try_from(row.index()).ok())
+                .filter(|i| *i < hits.len())
+                .and_then(|i| hits.get(i).cloned())
+        };
+        self.hide_palette();
+        match hit {
+            Some(PaletteHit::Tab { page, .. }) => {
+                self.tab_view.set_selected_page(&page);
+                if let Some(v) = selected_view(&self.tab_view) {
+                    v.grab_focus();
+                }
+            }
+            Some(PaletteHit::Go { url, .. }) => {
+                if let Some(v) = selected_view(&self.tab_view) {
+                    v.load_uri(&url);
+                    v.grab_focus();
+                }
+            }
+            Some(PaletteHit::Action { action, .. }) => {
+                gio::prelude::ActionGroupExt::activate_action(&self.window, action, None);
+            }
+            None => {
+                let query = self.palette_entry.text().to_string();
+                if !query.trim().is_empty()
+                    && let Some(v) = selected_view(&self.tab_view)
+                {
+                    v.load_uri(&search::resolve(&query, self.prefs.borrow().engine));
+                    v.grab_focus();
+                }
+            }
+        }
+    }
+
+    /// Summon the palette over the page, listing open tabs immediately.
+    fn toggle_palette(self: &Rc<Self>) {
+        if self.palette_card.is_visible() {
+            self.hide_palette();
+            if let Some(v) = selected_view(&self.tab_view) {
+                v.grab_focus();
+            }
+            return;
+        }
+        self.suggest_pop.popdown();
+        self.palette_entry.set_text("");
+        self.render_palette();
+        self.palette_card.set_visible(true);
+        self.palette_entry.grab_focus();
+    }
+
+    fn hide_palette(&self) {
+        self.palette_card.set_visible(false);
+    }
+
+    /// Immersive mode: the top bars slide away and the page owns the
+    /// window. Session-only, so a restart never traps anyone chromeless.
+    fn toggle_focus_mode(self: &Rc<Self>) {
+        let hiding = self.toolbar.reveals_top_bars();
+        self.toolbar.set_reveal_top_bars(!hiding);
+        self.toasts.add_toast(adw::Toast::new(if hiding {
+            "Focus mode on — Ctrl+Shift+F brings the chrome back"
+        } else {
+            "Focus mode off"
+        }));
     }
 
     /// Apply the blocker's effective state to `view`: an explicit per-site
@@ -2394,6 +2674,7 @@ impl Shell {
         }
         self.apply_shield_to_view(&view);
         let state = if enabled { "on" } else { "off" };
+        self.refresh_menu_labels();
         self.toasts.add_toast(adw::Toast::new(&format!("Blocker {state} for {domain}")));
     }
 
@@ -2780,7 +3061,7 @@ impl Shell {
                     if item.title.is_empty() { "New Tab".to_owned() } else { item.title.clone() };
                 btn.set_tooltip_text(Some(&title));
                 if item.selected {
-                    btn.add_css_class("suggested-action");
+                    btn.add_css_class("sidebar-pin-active");
                 }
                 let page = item.page.clone();
                 let tv = tab_view.clone();
@@ -2833,17 +3114,19 @@ impl Shell {
     fn sidebar_row(&self, item: &SidebarItem, tab_view: &adw::TabView) -> gtk4::ListBoxRow {
         let rail = *self.sidebar_rail.borrow();
         let slot = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
-        slot.set_margin_top(4);
-        slot.set_margin_bottom(4);
+        slot.set_margin_top(3);
+        slot.set_margin_bottom(3);
         slot.set_margin_start(8);
         slot.set_margin_end(8);
         // Fixed-width unread marker instead of a text prefix: the title
-        // never shifts and long titles cannot ellipsize the dot away.
+        // never shifts and long titles cannot ellipsize the dot away. The
+        // marker stays allocated and fades, since hiding it would drop it
+        // from layout and jump every title sideways on arrival.
         let dot = gtk4::Label::new(Some("•"));
         dot.set_size_request(10, -1);
         dot.set_valign(gtk4::Align::Center);
         dot.add_css_class("sidebar-dot");
-        dot.set_visible(item.attention && !rail);
+        dot.set_opacity(if item.attention && !rail { 1.0 } else { 0.0 });
         slot.append(&dot);
         let icon = item
             .page
@@ -2855,6 +3138,8 @@ impl Shell {
         icon.set_valign(gtk4::Align::Center);
         icon.add_css_class("favicon");
         slot.append(&icon);
+        // Rail rows carry no close button at all.
+        let mut close_btn: Option<gtk4::Button> = None;
         if !rail {
             let title = gtk4::Label::new(None);
             let name =
@@ -2888,20 +3173,59 @@ impl Shell {
             close.add_css_class("flat");
             close.add_css_class("close-btn");
             close.set_valign(gtk4::Align::Center);
+            close.set_visible(false);
             let page = item.page.clone();
             let tv = tab_view.clone();
             close.connect_clicked(move |_| {
                 tv.close_page(&page);
             });
             slot.append(&close);
+            close_btn = Some(close);
         }
         let row = gtk4::ListBoxRow::new();
         row.set_child(Some(&slot));
+        // Hover or keyboard focus reveals the close button. Driven here,
+        // not in CSS: a hidden widget takes no clicks, opacity would not.
+        if let Some(close) = close_btn {
+            let show = close.downgrade();
+            let hide = close.downgrade();
+            let motion = gtk4::EventControllerMotion::new();
+            motion.connect_enter(move |_, _, _| {
+                if let Some(c) = show.upgrade() {
+                    c.set_visible(true);
+                }
+            });
+            motion.connect_leave(move |_| {
+                if let Some(c) = hide.upgrade() {
+                    c.set_visible(false);
+                }
+            });
+            row.add_controller(motion);
+            let focus_show = close.downgrade();
+            let focus_hide = close.downgrade();
+            let focus = gtk4::EventControllerFocus::new();
+            focus.connect_enter(move |_| {
+                if let Some(c) = focus_show.upgrade() {
+                    c.set_visible(true);
+                }
+            });
+            focus.connect_leave(move |_| {
+                if let Some(c) = focus_hide.upgrade() {
+                    c.set_visible(false);
+                }
+            });
+            row.add_controller(focus);
+        }
         row.add_css_class("sidebar-row");
         if item.selected {
             row.add_css_class("sidebar-row-active");
         }
-        if item.loading {
+        // Honor reduced motion: the loading shimmer stays off when the
+        // toolkit animations are disabled.
+        let animations = gtk4::Settings::default()
+            .map(|s| s.property::<bool>("gtk-enable-animations"))
+            .unwrap_or(true);
+        if item.loading && animations {
             row.add_css_class("sidebar-loading");
         }
         let mut tip = if item.title.is_empty() { "New Tab".to_owned() } else { item.title.clone() };
@@ -2933,6 +3257,14 @@ impl Shell {
         self.prefs.borrow_mut().sidebar_visible = visible;
         self.save_prefs();
         self.sync_header_sidebar_btn();
+        // Mirrored both ways with an equality guard at each end, so the
+        // switch and the F9 path can never recurse into each other.
+        if let Some(row) = self.settings_sidebar_row.borrow().as_ref() {
+            row.set_active(visible);
+        }
+        if let Some(row) = self.settings_rail_row.borrow().as_ref() {
+            row.set_sensitive(visible);
+        }
         if visible {
             self.refresh_sidebar();
         }
@@ -2966,7 +3298,10 @@ impl Shell {
         *self.sidebar_rail.borrow_mut() = rail;
         self.prefs.borrow_mut().sidebar_collapsed = rail;
         self.save_prefs();
-        self.sidebar_reveal.set_size_request(if rail { 52 } else { 220 }, -1);
+        self.sidebar_box.set_size_request(if rail { 52 } else { 220 }, -1);
+        if let Some(row) = self.settings_rail_row.borrow().as_ref() {
+            row.set_active(rail);
+        }
         self.refresh_sidebar();
     }
 
@@ -2988,19 +3323,23 @@ impl Shell {
     }
 
     /// Switch appearance, persist it, and apply it to the chrome plus every
-    /// internal page immediately.
+    /// internal page immediately. Always re-applies: if a previous switch
+    /// was swallowed by the toolkit, clicking the same mode retries it.
     fn set_appearance(self: &Rc<Self>, appearance: Appearance) {
-        if self.prefs.borrow().appearance == appearance {
-            return;
-        }
         self.prefs.borrow_mut().appearance = appearance;
         self.save_prefs();
-        apply_appearance(appearance);
+        self.scheme_css.load_from_string(&scheme_chrome_css(appearance));
+        let verified = apply_appearance(appearance);
         let engine = self.prefs.borrow().engine;
         self.refresh_start_page(engine);
         self.reload_start_pages();
         self.reload_history_pages();
-        self.toasts.add_toast(adw::Toast::new(&format!("Appearance: {}", appearance.name())));
+        let msg = if verified {
+            format!("Appearance: {}", appearance.name())
+        } else {
+            "Appearance saved, but the system theme overrode it — click again to retry".to_owned()
+        };
+        self.toasts.add_toast(adw::Toast::new(&msg));
     }
 
     /// Switch the sleep timeout; the 5 s policy tick picks it up from prefs.
@@ -3084,7 +3423,7 @@ impl Shell {
                 if page_clone.is_selected()
                     && let Some(w) = window_weak.upgrade()
                 {
-                    w.set_title(Some(&format!("{t} — br0x")));
+                    w.set_title(Some(&format!("{} — br0x", strip_state_badges(t.as_ref()))));
                 }
             }
             if let Some(shell) = shell_weak.upgrade() {
@@ -3193,6 +3532,8 @@ impl Shell {
                 shell_started.apply_shield_to_view(v);
                 shell_started.apply_curtain_to_view(v);
                 shell_started.refresh_key_button();
+                shell_started.refresh_menu_labels();
+                shell_started.refresh_star_button();
                 shell_started.refresh_sidebar();
             }
             if event == webkit6::LoadEvent::Finished
@@ -3209,6 +3550,8 @@ impl Shell {
                 let shell_done = shell_started.clone();
                 let page_done = page_started.clone();
                 shell_started.refresh_sidebar();
+                shell_started.refresh_menu_labels();
+                shell_started.refresh_star_button();
                 eval_flag(v, HAS_PASSWORD_JS, move |has| {
                     if let Some(entry) = shell_done.tabs.borrow_mut().entry_mut(&page_done) {
                         entry.meta.has_password = has;
@@ -3289,16 +3632,9 @@ impl Shell {
             }
         });
 
-        // Clicking the page dismisses the suggestion list. Capture phase
-        // only observes: the handler returns nothing, so page clicks
-        // behave exactly as before.
-        let pop = self.suggest_pop.clone();
-        let page_click = gtk4::GestureClick::new();
-        page_click.set_propagation_phase(gtk4::PropagationPhase::Capture);
-        page_click.connect_pressed(move |_, _, _, _| {
-            pop.popdown();
-        });
-        view.add_controller(page_click);
+        // Suggestion dismissal lives window-wide in build_ui: one capture
+        // observer on the toast overlay covers header, sidebar, tab bar,
+        // and page, so per-view handlers would only double up.
 
         // target=_blank and window.open land here. Returning the new view
         // makes WebKit load the request into it, form submission and all;
@@ -3358,6 +3694,8 @@ impl Shell {
             page.set_needs_attention(false);
         }
         self.refresh_key_button();
+        self.refresh_menu_labels();
+        self.refresh_star_button();
         self.refresh_sidebar();
         self.read_progress.set_visible(false);
         self.window.set_title(Some(&window_title_for(&self.tab_view)));
@@ -3624,7 +3962,12 @@ impl Shell {
     /// rebuilt fresh on every open so rows never show stale prefs.
     #[allow(deprecated)]
     fn open_settings(self: &Rc<Self>) {
-        if let Some(win) = self.settings_win.borrow().as_ref() {
+        // Take in its own statement: an if-let scrutinee borrow would live
+        // through the body, and the synchronous close-request below
+        // borrows the same slot. Taken first, the handler only clears an
+        // already-empty slot in either timing.
+        let old = self.settings_win.borrow_mut().take();
+        if let Some(win) = old {
             win.close();
         }
         let win = SettingsWindow::new();
@@ -3733,21 +4076,28 @@ impl Shell {
         {
             let shell = self.clone();
             sidebar.connect_active_notify(move |row| {
-                shell.set_sidebar_visible(row.is_active());
+                if row.is_active() != *shell.sidebar_visible.borrow() {
+                    shell.set_sidebar_visible(row.is_active());
+                }
             });
         }
         group.add(&sidebar);
+        *self.settings_sidebar_row.borrow_mut() = Some(sidebar);
         let rail = adw::SwitchRow::new();
         rail.set_title("Collapse sidebar to icons");
         rail.set_subtitle("Slim rail instead of full titles.");
         rail.set_active(*self.sidebar_rail.borrow());
+        rail.set_sensitive(*self.sidebar_visible.borrow());
         {
             let shell = self.clone();
             rail.connect_active_notify(move |row| {
-                shell.set_sidebar_collapsed(row.is_active());
+                if row.is_active() != *shell.sidebar_rail.borrow() {
+                    shell.set_sidebar_collapsed(row.is_active());
+                }
             });
         }
         group.add(&rail);
+        *self.settings_rail_row.borrow_mut() = Some(rail);
         page.add(&group);
         win.add(&page);
     }
@@ -3899,16 +4249,37 @@ impl Shell {
         clear.set_tooltip_text(Some("Delete all locally stored history"));
         clear.add_css_class("destructive-action");
         let shell = self.clone();
+        let row_weak = clear_row.downgrade();
         clear.connect_clicked(move |_| {
-            if let Some(history) = shell.history.borrow().as_ref() {
-                match history.clear() {
-                    Ok(()) => shell.toasts.add_toast(adw::Toast::new("History cleared")),
-                    Err(e) => {
-                        eprintln!("br0x: history clear failed: {e}");
-                        shell.toasts.add_toast(adw::Toast::new("Could not clear history"));
+            // Same guard as the history page: one mis-click must never
+            // wipe the local store.
+            let dialog = adw::AlertDialog::builder()
+                .heading("Clear browsing history?")
+                .body("Every locally stored visit is deleted. This cannot be undone.")
+                .build();
+            dialog.add_responses(&[("cancel", "_Cancel"), ("clear", "_Clear")]);
+            dialog.set_response_appearance("clear", adw::ResponseAppearance::Destructive);
+            dialog.set_default_response(Some("cancel"));
+            dialog.set_close_response("cancel");
+            let confirmed = shell.clone();
+            let row_confirmed = row_weak.clone();
+            dialog.connect_response(Some("clear"), move |_, _| {
+                if let Some(history) = confirmed.history.borrow().as_ref() {
+                    match history.clear() {
+                        Ok(()) => {
+                            if let Some(row) = row_confirmed.upgrade() {
+                                row.set_subtitle("0 entries stored on this device.");
+                            }
+                            confirmed.toasts.add_toast(adw::Toast::new("History cleared"));
+                        }
+                        Err(e) => {
+                            eprintln!("br0x: history clear failed: {e}");
+                            confirmed.toasts.add_toast(adw::Toast::new("Could not clear history"));
+                        }
                     }
                 }
-            }
+            });
+            dialog.present(Some(&shell.window));
         });
         clear_row.add_suffix(&clear);
         history_group.add(&clear_row);
@@ -4078,6 +4449,7 @@ impl Shell {
                         entry.meta.pinned = pinned;
                     }
                     s.refresh_sidebar();
+                    s.refresh_menu_labels();
                     s.toasts.add_toast(adw::Toast::new(if pinned {
                         "Tab pinned, exempt from parking"
                     } else {
@@ -4228,10 +4600,26 @@ impl Shell {
         let s = self.clone();
         add(
             "focus-url",
-            &["<Control>l", "<Control>k"],
+            &["<Control>l"],
             Box::new(move || {
                 s.entry.grab_focus();
                 s.entry.select_region(0, -1);
+            }),
+        );
+        let s = self.clone();
+        add(
+            "palette",
+            &["<Control>k"],
+            Box::new(move || {
+                s.toggle_palette();
+            }),
+        );
+        let s = self.clone();
+        add(
+            "focus-mode",
+            &["<Control><Shift>f"],
+            Box::new(move || {
+                s.toggle_focus_mode();
             }),
         );
         let s = self.clone();
@@ -4399,10 +4787,11 @@ impl Shell {
 
 /// Apply the appearance pref to the whole shell chrome at once. The style
 /// manager switch is synchronous, so there is no flicker between themes.
-/// Verified by reading the switch back: libadwaita silently ignores the
-/// call when GTK_THEME is set (fixed by clearing it process-locally in
-/// main), so a mismatch is logged instead of failing quietly.
-fn apply_appearance(appearance: Appearance) {
+/// Returns whether the toolkit variant matches the request: libadwaita
+/// silently ignores the call when GTK_THEME is set (cleared process-locally
+/// in main) or a user gtk.css forces a variant, so callers must surface a
+/// mismatch instead of failing quietly.
+fn apply_appearance(appearance: Appearance) -> bool {
     let manager = adw::StyleManager::default();
     manager.set_color_scheme(match appearance {
         Appearance::System => adw::ColorScheme::Default,
@@ -4414,8 +4803,43 @@ fn apply_appearance(appearance: Appearance) {
         Appearance::Light => false,
         Appearance::Dark => true,
     };
-    if manager.is_dark() != want_dark {
+    let verified = manager.is_dark() == want_dark;
+    if !verified {
         eprintln!("br0x: appearance switch unverified (want dark={want_dark})");
+    }
+    verified
+}
+
+/// Chrome surfaces pinned to the chosen scheme, independent of the toolkit
+/// variant. Light stays light even when the style manager fails to flip
+/// (launcher GTK_THEME, user gtk.css): the header bar, sidebar, window,
+/// and omnibox carry explicit colors instead of inheriting a stuck variant.
+/// System pins nothing and follows the OS.
+fn scheme_chrome_css(appearance: Appearance) -> String {
+    match appearance {
+        Appearance::System => String::new(),
+        Appearance::Light => String::from(
+            r#"
+            window.br0x-window { background-color: #fafafa; color: #2e2e2e; }
+            headerbar, .top-bar { background-color: #ffffff; color: #2e2e2e; }
+            .br0x-sidebar { background-color: #f4f4f4; color: #2e2e2e; }
+            .omnibox-frame {
+                background-color: #ffffff;
+                border-color: color-mix(in srgb, currentColor 28%, transparent);
+            }
+            "#,
+        ),
+        Appearance::Dark => String::from(
+            r#"
+            window.br0x-window { background-color: #242424; color: #eeeeec; }
+            headerbar, .top-bar { background-color: #242424; color: #eeeeec; }
+            .br0x-sidebar { background-color: #1e1e1e; color: #eeeeec; }
+            .omnibox-frame {
+                background-color: #2d2d2d;
+                border-color: color-mix(in srgb, currentColor 28%, transparent);
+            }
+            "#,
+        ),
     }
 }
 
@@ -4513,6 +4937,12 @@ fn install_theme() {
             border-radius: 0;
         }
 
+        /* Reading progress shares the hairline shape but whispers: a dim
+        currentColor wash next to the accent load bar. */
+        .hairline-dim progress {
+            background-color: color-mix(in srgb, currentColor 35%, transparent);
+        }
+
         .sidebar-row {
             border-radius: 10px;
             margin: 2px 0;
@@ -4522,9 +4952,20 @@ fn install_theme() {
             background: color-mix(in srgb, var(--accent-color, @accent_bg_color) 16%, transparent);
         }
 
+        .sidebar-row-active:hover {
+            background: color-mix(in srgb, var(--accent-color, @accent_bg_color) 24%, transparent);
+        }
+
+        /* Selected pinned tabs share the row selection language instead of
+        a filled accent button. */
+        .sidebar-pin-active {
+            background: color-mix(in srgb, var(--accent-color, @accent_bg_color) 16%, transparent);
+            border-radius: 10px;
+        }
+
         .sidebar-badge {
             font-size: 11px;
-            opacity: 0.65;
+            opacity: 0.85;
         }
 
         .sidebar-dot {
@@ -4532,16 +4973,9 @@ fn install_theme() {
             font-size: 11px;
         }
 
-        /* Close buttons appear on hover or keyboard focus only, so titles
-        keep their full width at rest. */
-        .sidebar-row .close-btn {
-            opacity: 0;
-        }
-
-        .sidebar-row:hover .close-btn,
-        .sidebar-row:focus-within .close-btn {
-            opacity: 1;
-        }
+        /* Close-button visibility is driven from sidebar_row on hover and
+        focus: GTK CSS has no visibility property, and opacity alone
+        would leave an invisible close target on the row edge. */
 
         @keyframes sidebar-shimmer {
             from { opacity: 0.45; }
@@ -4550,6 +4984,23 @@ fn install_theme() {
 
         .sidebar-loading image.favicon {
             animation: sidebar-shimmer 700ms ease-in-out infinite alternate;
+        }
+
+        /* One motion language: quick hovers, calm reveals. */
+        .sidebar-row,
+        headerbar button,
+        .omnibox-frame {
+            transition: background-color 200ms cubic-bezier(0.32, 0.72, 0, 1),
+                border-color 200ms cubic-bezier(0.32, 0.72, 0, 1),
+                box-shadow 200ms cubic-bezier(0.32, 0.72, 0, 1);
+        }
+
+        .palette-card {
+            background-color: var(--view-bg-color, @view_bg_color);
+            border-radius: 16px;
+            border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+            box-shadow: 0 12px 40px color-mix(in srgb, currentColor 22%, transparent);
+            padding-bottom: 8px;
         }
         "#,
     );
@@ -4581,6 +5032,7 @@ fn build_ui(app: &adw::Application) {
         .default_width(1200)
         .default_height(800)
         .build();
+    window.add_css_class("br0x-window");
 
     install_theme();
     apply_appearance(prefs.borrow().appearance);
@@ -4635,6 +5087,11 @@ fn build_ui(app: &adw::Application) {
     key_btn.add_css_class("flat");
     key_btn.set_visible(false);
 
+    // Star button for the current page, kept in sync on every switch.
+    let star_btn = gtk4::Button::from_icon_name("non-starred-symbolic");
+    star_btn.set_tooltip_text(Some("Bookmark this page (Ctrl+D)"));
+    star_btn.add_css_class("flat");
+
     /// One shared engine menu: the address-bar picker and the hamburger
     /// submenu show the same items, so they can never disagree.
     fn engine_menu_model() -> gio::Menu {
@@ -4661,10 +5118,11 @@ fn build_ui(app: &adw::Application) {
     omnibox_box.add_css_class("omnibox-frame");
     omnibox_box.set_hexpand(true);
     omnibox_box.set_size_request(-1, 40);
-    // The bar keeps a single address field, the engine picker badge, and
-    // the contextual key icon (hidden unless the page has a login form).
-    // Everything else lives in the hamburger menu.
+    // The bar keeps a single address field, the bookmark star, the engine
+    // picker badge, and the contextual key icon (hidden unless the page
+    // has a login form). Everything else lives in the hamburger menu.
     omnibox_box.append(&entry);
+    omnibox_box.append(&star_btn);
     let engine_btn = gtk4::MenuButton::new();
     engine_btn.set_label(prefs.borrow().engine.name());
     engine_btn.set_tooltip_text(Some("Search engine (address bar + start page)"));
@@ -4672,33 +5130,48 @@ fn build_ui(app: &adw::Application) {
     omnibox_box.append(&engine_btn);
     omnibox_box.append(&key_btn);
 
-    // Single hamburger menu: every lesser-used action stays reachable with
-    // its shortcut intact. The bar itself keeps back, forward, reload, the
-    // address field, and this one menu button plus the sidebar toggle.
+    // Grouped hamburger menu: tabs, find, zoom, engine, page tools,
+    // session, view, settings. Quit stands alone at the end.
     let menu = gio::Menu::new();
-    menu.append(Some("New Tab"), Some("win.new-tab"));
-    menu.append(Some("Bookmark This Page"), Some("win.bookmark-page"));
-    menu.append(Some("Bookmarks…"), Some("win.show-bookmarks"));
-    menu.append(Some("Find in Page"), Some("win.find"));
-    menu.append(Some("Zoom In"), Some("win.zoom-in"));
-    menu.append(Some("Zoom Out"), Some("win.zoom-out"));
-    menu.append(Some("Reset Zoom"), Some("win.zoom-reset"));
+    let tabs = gio::Menu::new();
+    tabs.append(Some("New Tab"), Some("win.new-tab"));
+    tabs.append(Some("Reopen Closed Tab"), Some("win.reopen-tab"));
+    tabs.append(Some("Close Tab"), Some("win.close-tab"));
+    let pin_item = gio::MenuItem::new(Some("Pin Tab"), Some("win.toggle-pin"));
+    tabs.append_item(&pin_item);
+    tabs.append(Some("Move Tab Up"), Some("win.move-tab-up"));
+    tabs.append(Some("Move Tab Down"), Some("win.move-tab-down"));
+    menu.append_section(None, &tabs);
+    let find = gio::Menu::new();
+    find.append(Some("Find in Page"), Some("win.find"));
+    find.append(Some("Command Palette"), Some("win.palette"));
+    menu.append_section(None, &find);
+    let zoom = gio::Menu::new();
+    zoom.append(Some("Zoom In"), Some("win.zoom-in"));
+    zoom.append(Some("Zoom Out"), Some("win.zoom-out"));
+    zoom.append(Some("Reset Zoom"), Some("win.zoom-reset"));
+    menu.append_section(None, &zoom);
     menu.append_submenu(Some("Search Engine"), &engine_menu_model());
-    menu.append(Some("Reopen Closed Tab"), Some("win.reopen-tab"));
-    menu.append(Some("Close Tab"), Some("win.close-tab"));
-    menu.append(Some("Pin Tab"), Some("win.toggle-pin"));
-    menu.append(Some("Move Tab Up"), Some("win.move-tab-up"));
-    menu.append(Some("Move Tab Down"), Some("win.move-tab-down"));
-    menu.append(Some("Copy Address"), Some("win.copy-url"));
-    menu.append(Some("History"), Some("win.history"));
-    menu.append(Some("Restore Previous Session"), Some("win.restore-prev"));
-    menu.append(Some("Restore Tabs on Startup"), Some("win.restore-session"));
-    menu.append(Some("Blocker for This Site"), Some("win.toggle-shield"));
-    menu.append(Some("Reader Mode"), Some("win.reader"));
-    menu.append(Some("Pop Out Video"), Some("win.popout"));
-    menu.append(Some("Hide Element on Site"), Some("win.curtain-pick"));
-    menu.append(Some("Unhide All on Site"), Some("win.curtain-clear"));
-    menu.append(Some("Sidebar"), Some("win.toggle-sidebar"));
+    let page = gio::Menu::new();
+    page.append(Some("Bookmark This Page"), Some("win.bookmark-page"));
+    page.append(Some("Bookmarks…"), Some("win.show-bookmarks"));
+    page.append(Some("Copy Address"), Some("win.copy-url"));
+    let shield_item = gio::MenuItem::new(Some("Blocker for This Site"), Some("win.toggle-shield"));
+    page.append_item(&shield_item);
+    page.append(Some("Reader Mode"), Some("win.reader"));
+    page.append(Some("Pop Out Video"), Some("win.popout"));
+    page.append(Some("Hide Element on Site"), Some("win.curtain-pick"));
+    page.append(Some("Unhide All on Site"), Some("win.curtain-clear"));
+    menu.append_section(None, &page);
+    let history_menu = gio::Menu::new();
+    history_menu.append(Some("History"), Some("win.history"));
+    history_menu.append(Some("Restore Previous Session"), Some("win.restore-prev"));
+    history_menu.append(Some("Restore Tabs on Startup"), Some("win.restore-session"));
+    menu.append_section(None, &history_menu);
+    let view = gio::Menu::new();
+    view.append(Some("Sidebar"), Some("win.toggle-sidebar"));
+    view.append(Some("Focus Mode"), Some("win.focus-mode"));
+    menu.append_section(None, &view);
     menu.append(Some("Settings…"), Some("win.settings"));
     menu.append(Some("Quit"), Some("win.quit"));
     let menu_btn = gtk4::MenuButton::builder()
@@ -4723,8 +5196,10 @@ fn build_ui(app: &adw::Application) {
     progress.set_visible(false);
 
     // Thin reading-progress line under the active tab, driven by scroll.
+    // Dimmer than the accent load bar by design, so the two never confuse.
     let read_progress = gtk4::ProgressBar::new();
     read_progress.add_css_class("hairline-progress");
+    read_progress.add_css_class("hairline-dim");
     read_progress.set_visible(false);
 
     // Vertical tab sidebar in a slide revealer: the show/hide animation is
@@ -4737,8 +5212,8 @@ fn build_ui(app: &adw::Application) {
     sidebar_collapse.add_css_class("flat");
     // CenterBox, not Box: a plain box ORs its children's expand flags, which
     // leaked expansion into the revealer and stretched the sidebar to half
-    // the window. CenterBox never computes expand, so the 220 px request
-    // below is a real width, not a floor.
+    // the window. CenterBox never computes expand, so the child's 220 px
+    // request above is a real width, not a floor.
     let sidebar_head = gtk4::CenterBox::new();
     sidebar_head.set_margin_top(6);
     sidebar_head.set_margin_bottom(6);
@@ -4763,13 +5238,16 @@ fn build_ui(app: &adw::Application) {
     sidebar_scroll.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
     sidebar_scroll.set_vexpand(true);
     let sidebar_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    sidebar_box.add_css_class("br0x-sidebar");
+    // Width lives on the revealer's child: a request on the revealer itself
+    // is a hard minimum even while hidden, permanently stealing 220 px.
+    sidebar_box.set_size_request(220, -1);
     sidebar_box.append(&sidebar_head);
     sidebar_box.append(&sidebar_pins);
     sidebar_box.append(&sidebar_scroll);
     let sidebar_reveal = gtk4::Revealer::new();
     sidebar_reveal.set_transition_type(gtk4::RevealerTransitionType::SlideRight);
     sidebar_reveal.set_transition_duration(200);
-    sidebar_reveal.set_size_request(220, -1);
     sidebar_reveal.set_child(Some(&sidebar_box));
     sidebar_reveal.set_reveal_child(false);
     tab_view.set_hexpand(true);
@@ -4796,18 +5274,68 @@ fn build_ui(app: &adw::Application) {
     find_bar.set_show_close_button(true);
     find_bar.connect_entry(&find_entry);
 
+    // Centered command palette: entry plus ranked rows on a floating card.
+    // An overlay centers it over the page; hidden costs nothing.
+    let palette_entry = gtk4::SearchEntry::new();
+    palette_entry.set_placeholder_text(Some("Type a command, tab, or address"));
+    palette_entry.set_hexpand(true);
+    let palette_list = gtk4::ListBox::new();
+    palette_list.set_selection_mode(gtk4::SelectionMode::Single);
+    let palette_scroll = gtk4::ScrolledWindow::new();
+    palette_scroll.set_child(Some(&palette_list));
+    palette_scroll.set_propagate_natural_height(true);
+    palette_scroll.set_max_content_height(430);
+    palette_scroll.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
+    let palette_head = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    palette_head.set_margin_top(8);
+    palette_head.set_margin_start(8);
+    palette_head.set_margin_end(8);
+    palette_head.append(&palette_entry);
+    let palette_card = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    palette_card.add_css_class("palette-card");
+    palette_card.append(&palette_head);
+    palette_card.append(&palette_scroll);
+    palette_card.set_halign(gtk4::Align::Center);
+    palette_card.set_valign(gtk4::Align::Start);
+    palette_card.set_margin_top(64);
+    palette_card.set_size_request(560, -1);
+    palette_card.set_visible(false);
+
     let toolbar = adw::ToolbarView::new();
     toolbar.add_top_bar(&header);
     toolbar.add_top_bar(&tab_bar);
     toolbar.add_top_bar(&read_progress);
     toolbar.add_top_bar(&progress);
     toolbar.add_top_bar(&find_bar);
-    toolbar.set_content(Some(&content_box));
+    let content_overlay = gtk4::Overlay::new();
+    content_overlay.set_child(Some(&content_box));
+    content_overlay.add_overlay(&palette_card);
+    toolbar.set_content(Some(&content_overlay));
 
     let toasts = adw::ToastOverlay::new();
     toasts.set_child(Some(&toolbar));
     window.set_content(Some(&toasts));
 
+    // Window-wide suggestion dismissal: the list keeps autohide off so
+    // typing never loses the keyboard, and it lives on its own surface,
+    // so any capture click reaching the main surface is outside the list
+    // by construction. Clicks back into the entry only close it until the
+    // next keystroke reopens it. Losing window focus closes it too.
+    {
+        let pop = suggest_popover.clone();
+        let dismiss = gtk4::GestureClick::new();
+        dismiss.set_propagation_phase(gtk4::PropagationPhase::Capture);
+        dismiss.connect_pressed(move |_, _, _, _| {
+            pop.popdown();
+        });
+        toasts.add_controller(dismiss);
+        let pop = suggest_popover.clone();
+        window.connect_notify_local(Some("is-active"), move |w, _| {
+            if !w.is_active() {
+                pop.popdown();
+            }
+        });
+    }
     // History opens after first paint: suggestions, Frequent tiles and the
     // history page simply see an empty store until the database is ready,
     // instead of blocking the window on SQLite.
@@ -4817,6 +5345,17 @@ fn build_ui(app: &adw::Application) {
 
     let bookmarks_store = BookmarkStore::new(bookmarks_path());
     let bookmarks = Rc::new(RefCell::new(bookmarks_store.load()));
+
+    // Scheme-pinned chrome loads after the generic theme so it wins ties.
+    let scheme_css = gtk4::CssProvider::new();
+    if let Some(display) = gtk4::gdk::Display::default() {
+        gtk4::style_context_add_provider_for_display(
+            &display,
+            &scheme_css,
+            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+        );
+    }
+    scheme_css.load_from_string(&scheme_chrome_css(prefs.borrow().appearance));
 
     let shell = Rc::new(Shell {
         tab_view: tab_view.clone(),
@@ -4828,6 +5367,7 @@ fn build_ui(app: &adw::Application) {
         progress,
         read_progress,
         key_btn,
+        star_btn: star_btn.clone(),
         engine_btn: engine_btn.clone(),
         find_bar: find_bar.clone(),
         find_entry: find_entry.clone(),
@@ -4840,11 +5380,22 @@ fn build_ui(app: &adw::Application) {
         last_newtab,
         suggest_pop: suggest_popover.clone(),
         sidebar_reveal: sidebar_reveal.clone(),
+        sidebar_box: sidebar_box.clone(),
         sidebar_pins: sidebar_pins.clone(),
         sidebar_list: sidebar_list.clone(),
         sidebar_head_label: sidebar_label.clone(),
         sidebar_collapse_btn: sidebar_collapse.clone(),
         header_sidebar_btn: sidebar_btn.clone(),
+        scheme_css: scheme_css.clone(),
+        toolbar: toolbar.clone(),
+        palette_card: palette_card.clone(),
+        palette_entry: palette_entry.clone(),
+        palette_list: palette_list.clone(),
+        palette_store: RefCell::new(Vec::new()),
+        pin_item: pin_item.clone(),
+        shield_item: shield_item.clone(),
+        settings_sidebar_row: RefCell::new(None),
+        settings_rail_row: RefCell::new(None),
         sidebar_pages: RefCell::new(Vec::new()),
         sidebar_visible: RefCell::new(prefs.borrow().sidebar_visible),
         sidebar_rail: RefCell::new(prefs.borrow().sidebar_collapsed),
@@ -4868,9 +5419,80 @@ fn build_ui(app: &adw::Application) {
         tabs: Rc::new(RefCell::new(Tabs::new())),
     });
     // Restore the persisted sidebar shape before first paint.
-    shell.sidebar_reveal.set_size_request(if *shell.sidebar_rail.borrow() { 52 } else { 220 }, -1);
+    shell.sidebar_box.set_size_request(if *shell.sidebar_rail.borrow() { 52 } else { 220 }, -1);
     shell.sidebar_reveal.set_reveal_child(*shell.sidebar_visible.borrow());
     shell.sync_header_sidebar_btn();
+
+    // Palette wiring: typing re-ranks, arrows move, Enter runs, Escape
+    // dismisses back to the page. Clicking a row runs it directly.
+    {
+        let s = shell.clone();
+        let entry = s.palette_entry.clone();
+        entry.connect_changed(move |_| {
+            s.render_palette();
+        });
+    }
+    {
+        let s = shell.clone();
+        let entry = s.palette_entry.clone();
+        entry.connect_activate(move |_| {
+            s.activate_palette();
+        });
+    }
+    {
+        let s = shell.clone();
+        let entry = s.palette_entry.clone();
+        let focus = gtk4::EventControllerFocus::new();
+        focus.connect_leave(move |_| {
+            s.hide_palette();
+        });
+        entry.add_controller(focus);
+    }
+    {
+        let s = shell.clone();
+        let list = s.palette_list.clone();
+        let keys = gtk4::EventControllerKey::new();
+        // Capture: the search entry claims Escape for stop-search at target
+        // phase, so a bubble handler would never see the dismiss key.
+        keys.set_propagation_phase(gtk4::PropagationPhase::Capture);
+        keys.connect_key_pressed(move |_, keyval, _, _| match keyval {
+            gtk4::gdk::Key::Escape => {
+                s.hide_palette();
+                if let Some(v) = selected_view(&s.tab_view) {
+                    v.grab_focus();
+                }
+                glib::Propagation::Stop
+            }
+            gtk4::gdk::Key::Down | gtk4::gdk::Key::Up => {
+                let count = suggest_row_count(&list);
+                if count == 0 {
+                    return glib::Propagation::Proceed;
+                }
+                let current = list
+                    .selected_row()
+                    .and_then(|row| usize::try_from(row.index()).ok())
+                    .map(|i| i as isize);
+                let next = match (keyval, current) {
+                    (gtk4::gdk::Key::Down, Some(i)) => (i + 1) % count as isize,
+                    (gtk4::gdk::Key::Down, None) => 0,
+                    (_, Some(i)) => (i - 1 + count as isize) % count as isize,
+                    (_, None) => count as isize - 1,
+                };
+                list.select_row(list.row_at_index(next as i32).as_ref());
+                glib::Propagation::Stop
+            }
+            _ => glib::Propagation::Proceed,
+        });
+        entry.add_controller(keys);
+    }
+    {
+        let s = shell.clone();
+        let list = s.palette_list.clone();
+        list.connect_row_activated(move |list, row| {
+            list.select_row(Some(row));
+            s.activate_palette();
+        });
+    }
 
     {
         let s = shell.clone();
@@ -4879,6 +5501,13 @@ fn build_ui(app: &adw::Application) {
         btn.connect_clicked(move |_| {
             s.rebuild_key_pop();
             pop.popup();
+        });
+    }
+    {
+        let s = shell.clone();
+        let btn = s.star_btn.clone();
+        btn.connect_clicked(move |_| {
+            s.toggle_bookmark();
         });
     }
     {
@@ -4998,12 +5627,9 @@ fn build_ui(app: &adw::Application) {
             let fallback = SuggestHit { url: search::resolve(&query, engine), page: None };
             let target = match suggestion_target(&urls.borrow(), selected, &query, engine) {
                 Some(hit) => hit,
-                None if selected.is_none() && popover.is_visible() => urls
-                    .borrow()
-                    .first()
-                    .filter(|hit| hit.page.is_some())
-                    .cloned()
-                    .unwrap_or(fallback),
+                None if selected.is_none() && popover.is_visible() => {
+                    urls.borrow().first().cloned().unwrap_or(fallback)
+                }
                 None => fallback,
             };
             popover.popdown();
@@ -5605,6 +6231,37 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scheme_chrome_pins_light_surfaces() {
+        let css = scheme_chrome_css(Appearance::Light);
+        assert!(css.contains("headerbar"), "header bar pinned");
+        assert!(css.contains(".br0x-sidebar"), "sidebar pinned");
+        assert!(css.contains("#ffffff"), "light header pin present");
+        assert!(!css.contains("#1e1e1e"), "no dark pins in light CSS");
+    }
+
+    #[test]
+    fn scheme_chrome_pins_dark_surfaces() {
+        let css = scheme_chrome_css(Appearance::Dark);
+        assert!(css.contains("headerbar"), "header bar pinned");
+        assert!(css.contains(".br0x-sidebar"), "sidebar pinned");
+        assert!(!css.contains("#ffffff"), "no light pins in dark CSS");
+    }
+
+    #[test]
+    fn scheme_chrome_system_pins_nothing() {
+        assert!(scheme_chrome_css(Appearance::System).is_empty());
+    }
+
+    #[test]
+    fn fuzzy_score_ranks_tight_matches_first() {
+        assert_eq!(fuzzy_score("", "anything"), Some(0));
+        assert_eq!(fuzzy_score("xyz", "GitHub"), None);
+        assert_eq!(fuzzy_score("gh", "GitHub"), Some(3));
+        assert_eq!(fuzzy_score("GH", "github"), Some(3));
+        assert!(fuzzy_score("git", "GitHub") < fuzzy_score("gth", "GitHub"));
+    }
 
     #[test]
     fn percent_decodes_escapes_and_plus() {

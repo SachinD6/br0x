@@ -21,10 +21,10 @@ br0x is a minimal browser for Linux. It uses Rust, GTK4, and WebKitGTK. It runs 
 ## What works today
 
 - Tabs with favicons, titles, close buttons, and a native tab bar (Ctrl+T, Ctrl+W)
-- Built-in start page: search box, real favicons, Frequent sites, Bookmarks, quick links, your own pinnable shortcuts, engine aware
+- Built-in start page: search box, letter tiles, Frequent sites, quick links, your own pinnable shortcuts, engine aware
 - Address bar with search fallback, live history suggestions, and a search engine picker (DuckDuckGo, Google, Brave, Bing, Startpage, Wikipedia)
 - Lock icon for https, warning icon for http, magnifier on empty pages, clear button, bookmark star, pill shaped entry
-- Bookmarks: star button, Ctrl+D, menu entry, start page section
+- Bookmarks: star button, Ctrl+D, menu entry
 - Back, forward, reload, stop, and zoom (single toast, no pile-up)
 - Find in page with live match count (Ctrl+F)
 - `window.open` and `target=_blank` open real tabs
@@ -35,7 +35,7 @@ br0x is a minimal browser for Linux. It uses Rust, GTK4, and WebKitGTK. It runs 
 - Vertical sidebar tabs (F9): pinned tabs as icons, animated reveal, loading shimmer, keyboard reorder
 - Hide-anything: dismiss any element for the site, and it stays hidden
 - Reading mode: articles as one text column, no page chrome
-- Tab palette: Ctrl+K, then type — open tabs first, then history, then search
+- Tab palette: Ctrl+K, then type — fuzzy-ranked tabs, actions, history, bookmarks, trailing search
 - Passwords in a private on-disk vault (owner-only file, never logged); OS keyring backend next. Per-site shield level
 - Video pop-out: the playing video in its own window
 - Script-driven testing: `scripts/bench` drives isolated tabs over a socket when br0x runs with `BR0X_BENCH=1` (see `crates/br0x-shell-gtk/BENCH_WIRING.md`)
@@ -51,7 +51,8 @@ br0x is a minimal browser for Linux. It uses Rust, GTK4, and WebKitGTK. It runs 
 | Ctrl+T | New tab |
 | Ctrl+W | Close tab |
 | Ctrl+Shift+T | Reopen closed tab |
-| Ctrl+L, Ctrl+K | Focus address bar |
+| Ctrl+L | Focus address bar |
+| Ctrl+Shift+F | Focus mode (hide the chrome) |
 | Ctrl+F | Find in page |
 | Ctrl+G, Ctrl+Shift+G | Next, previous match |
 | Ctrl+R, F5 | Reload |
@@ -60,7 +61,7 @@ br0x is a minimal browser for Linux. It uses Rust, GTK4, and WebKitGTK. It runs 
 | Ctrl+Plus, Ctrl+Minus, Ctrl+0 | Zoom in, out, reset |
 | Ctrl+Tab, Ctrl+Shift+Tab | Next, previous tab |
 | Ctrl+D | Bookmark this page |
-| Ctrl+K, then type | Tab palette (open tabs first) |
+| Ctrl+K, then type | Command palette (tabs, actions, history, search) |
 | F9 | Sidebar tabs on/off |
 | Ctrl+Shift+R | Reading mode |
 | Ctrl+Shift+H | Hide the element under the cursor |
