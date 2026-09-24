@@ -432,7 +432,7 @@ fn history_html(
       padding: 11px 15px;
       color: inherit;
       font: inherit;
-      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
     }}
     .filter-box input:focus {{
       outline: none;
@@ -995,7 +995,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
       color: inherit;
       font: inherit;
       font-size: 15px;
-      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 12px 32px rgba(15, 23, 42, 0.08);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 12px 32px rgba(0, 0, 0, 0.08);
       transition: border-color 150ms ease, box-shadow 150ms ease;
     }}
     .engine-badge {{
@@ -1006,7 +1006,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
       font-size: 11px;
       font-weight: 600;
       letter-spacing: 0.2px;
-      color: light-dark(#8a8f9c, #8e8e8e);
+      color: light-dark(#5f6672, #a9a9a9);
       background: light-dark(#f1f4f9, #3a3a3a);
       border: 1px solid light-dark(#e2e5ec, #4a4a4a);
       border-radius: 9999px;
@@ -1020,7 +1020,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
       box-shadow: 0 0 0 3px color-mix(in srgb, AccentColor 16%, transparent);
     }}
     .search-field::placeholder {{
-      color: light-dark(#9e9e9e, #757575);
+      color: light-dark(#767676, #a9a9a9);
     }}
     .grid {{
       display: grid;
@@ -1060,7 +1060,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
     a.card:hover {{
       transform: translateY(-1px);
       border-color: light-dark(#c3ccd9, #4a4a4a);
-      box-shadow: 0 6px 18px rgba(15, 23, 42, 0.1);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.1);
     }}
     .section-count {{
       font-weight: 600;
@@ -1091,7 +1091,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.6px;
-      color: light-dark(#8a8f9c, #8e8e8e);
+      color: light-dark(#5f6672, #a9a9a9);
       margin: 26px 0 10px;
     }}
     .fav {{
@@ -1137,7 +1137,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
       flex: none;
       font-size: 11px;
       font-weight: 600;
-      color: light-dark(#8a8f9c, #8e8e8e);
+      color: light-dark(#5f6672, #a9a9a9);
       border: 1px solid light-dark(#e2e5ec, #3d3d3d);
       border-radius: 6px;
       padding: 1px 6px;
@@ -1184,7 +1184,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
     }}
     footer {{
       margin-top: 40px;
-      color: light-dark(#9e9e9e, #757575);
+      color: light-dark(#767676, #a9a9a9);
       font-size: 12px;
       display: flex;
       flex-wrap: wrap;
@@ -1216,7 +1216,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
       align-items: center;
       justify-content: center;
       padding: 20px;
-      background: rgba(0, 0, 0, 0.4);
+      background: light-dark(rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0.65));
       z-index: 50;
     }}
     .modal-backdrop.open {{
@@ -1727,19 +1727,21 @@ fn render_suggestions(
         let stack = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
         stack.set_margin_top(4);
         stack.set_margin_bottom(4);
-        let url_label = gtk4::Label::new(Some(&visit.url));
-        url_label.set_xalign(0.0);
-        url_label.set_hexpand(true);
-        url_label.set_max_width_chars(64);
-        url_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+        // Title first, address second: the same hierarchy as open-tab rows
+        // and every browser address dropdown.
         let title_label = gtk4::Label::new(Some(&title));
         title_label.set_xalign(0.0);
         title_label.set_hexpand(true);
         title_label.set_max_width_chars(64);
         title_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
-        title_label.add_css_class("dim-label");
-        stack.append(&url_label);
+        let url_label = gtk4::Label::new(Some(&visit.url));
+        url_label.set_xalign(0.0);
+        url_label.set_hexpand(true);
+        url_label.set_max_width_chars(64);
+        url_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+        url_label.add_css_class("dim-label");
         stack.append(&title_label);
+        stack.append(&url_label);
         let row = gtk4::ListBoxRow::new();
         row.set_child(Some(&stack));
         list.append(&row);
@@ -2142,6 +2144,7 @@ struct Shell {
     progress: gtk4::ProgressBar,
     read_progress: gtk4::ProgressBar,
     key_btn: gtk4::Button,
+    star_btn: gtk4::Button,
     engine_btn: gtk4::MenuButton,
     find_bar: gtk4::SearchBar,
     find_entry: gtk4::SearchEntry,
@@ -2169,6 +2172,13 @@ struct Shell {
     palette_entry: gtk4::SearchEntry,
     palette_list: gtk4::ListBox,
     palette_store: RefCell<Vec<PaletteHit>>,
+    /// Menu rows that name the current state instead of a fixed verb.
+    pin_item: gio::MenuItem,
+    shield_item: gio::MenuItem,
+    /// Settings switches mirrored from outside (F9, rail button) so an
+    /// open window never shows the opposite of the truth.
+    settings_sidebar_row: RefCell<Option<adw::SwitchRow>>,
+    settings_rail_row: RefCell<Option<adw::SwitchRow>>,
     sidebar_pages: RefCell<Vec<adw::TabPage>>,
     sidebar_visible: RefCell<bool>,
     sidebar_rail: RefCell<bool>,
@@ -2326,6 +2336,24 @@ impl Shell {
         }));
     }
 
+    /// Menu rows that name the current state: Unpin vs Pin, blocker on or
+    /// off for the selected tab's site.
+    fn refresh_menu_labels(&self) {
+        let pinned = self.tab_view.selected_page().is_some_and(|p| p.is_pinned());
+        self.pin_item.set_label(Some(if pinned { "Unpin Tab" } else { "Pin Tab" }));
+        let domain = selected_view(&self.tab_view)
+            .and_then(|v| v.uri().map(|u| u.to_string()))
+            .map(|uri| domain_of(&uri))
+            .unwrap_or_default();
+        self.shield_item.set_label(Some(if domain.is_empty() {
+            "Blocker for This Site"
+        } else if self.blocker_active(&domain) {
+            "Blocker On for This Site"
+        } else {
+            "Blocker Off for This Site"
+        }));
+    }
+
     /// Star on/off for the current page. Internal pages cannot be saved.
     fn toggle_bookmark(self: &Rc<Self>) {
         let Some(view) = selected_view(&self.tab_view) else {
@@ -2353,6 +2381,29 @@ impl Shell {
                 eprintln!("br0x: bookmarks save failed: {e}");
             }
         }
+        self.refresh_star_button();
+    }
+
+    /// Star button mirrors the selected page: filled when saved, outline
+    /// otherwise, quiet on pages that cannot be saved.
+    fn refresh_star_button(&self) {
+        let uri = selected_view(&self.tab_view).and_then(|v| v.uri().map(|u| u.to_string()));
+        let saveable = uri.as_ref().is_some_and(|u| !is_blank_uri(u) && !u.starts_with("br0x://"));
+        let starred = saveable
+            && uri
+                .as_ref()
+                .is_some_and(|u| BookmarkStore::is_bookmarked(&self.bookmarks.borrow(), u));
+        self.star_btn.set_icon_name(if starred {
+            "starred-symbolic"
+        } else {
+            "non-starred-symbolic"
+        });
+        self.star_btn.set_tooltip_text(Some(if starred {
+            "Bookmarked — click to remove (Ctrl+D)"
+        } else {
+            "Bookmark this page (Ctrl+D)"
+        }));
+        self.star_btn.set_sensitive(saveable);
     }
 
     /// Reload tabs currently showing the start page (fresh data after an
@@ -2609,6 +2660,7 @@ impl Shell {
         }
         self.apply_shield_to_view(&view);
         let state = if enabled { "on" } else { "off" };
+        self.refresh_menu_labels();
         self.toasts.add_toast(adw::Toast::new(&format!("Blocker {state} for {domain}")));
     }
 
@@ -2995,7 +3047,7 @@ impl Shell {
                     if item.title.is_empty() { "New Tab".to_owned() } else { item.title.clone() };
                 btn.set_tooltip_text(Some(&title));
                 if item.selected {
-                    btn.add_css_class("suggested-action");
+                    btn.add_css_class("sidebar-pin-active");
                 }
                 let page = item.page.clone();
                 let tv = tab_view.clone();
@@ -3048,8 +3100,8 @@ impl Shell {
     fn sidebar_row(&self, item: &SidebarItem, tab_view: &adw::TabView) -> gtk4::ListBoxRow {
         let rail = *self.sidebar_rail.borrow();
         let slot = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
-        slot.set_margin_top(4);
-        slot.set_margin_bottom(4);
+        slot.set_margin_top(3);
+        slot.set_margin_bottom(3);
         slot.set_margin_start(8);
         slot.set_margin_end(8);
         // Fixed-width unread marker instead of a text prefix: the title
@@ -3155,6 +3207,14 @@ impl Shell {
         self.prefs.borrow_mut().sidebar_visible = visible;
         self.save_prefs();
         self.sync_header_sidebar_btn();
+        // Mirrored both ways with an equality guard at each end, so the
+        // switch and the F9 path can never recurse into each other.
+        if let Some(row) = self.settings_sidebar_row.borrow().as_ref() {
+            row.set_active(visible);
+        }
+        if let Some(row) = self.settings_rail_row.borrow().as_ref() {
+            row.set_sensitive(visible);
+        }
         if visible {
             self.refresh_sidebar();
         }
@@ -3189,6 +3249,9 @@ impl Shell {
         self.prefs.borrow_mut().sidebar_collapsed = rail;
         self.save_prefs();
         self.sidebar_box.set_size_request(if rail { 52 } else { 220 }, -1);
+        if let Some(row) = self.settings_rail_row.borrow().as_ref() {
+            row.set_active(rail);
+        }
         self.refresh_sidebar();
     }
 
@@ -3577,6 +3640,8 @@ impl Shell {
             page.set_needs_attention(false);
         }
         self.refresh_key_button();
+        self.refresh_menu_labels();
+        self.refresh_star_button();
         self.refresh_sidebar();
         self.read_progress.set_visible(false);
         self.window.set_title(Some(&window_title_for(&self.tab_view)));
@@ -3955,21 +4020,28 @@ impl Shell {
         {
             let shell = self.clone();
             sidebar.connect_active_notify(move |row| {
-                shell.set_sidebar_visible(row.is_active());
+                if row.is_active() != *shell.sidebar_visible.borrow() {
+                    shell.set_sidebar_visible(row.is_active());
+                }
             });
         }
         group.add(&sidebar);
+        *self.settings_sidebar_row.borrow_mut() = Some(sidebar);
         let rail = adw::SwitchRow::new();
         rail.set_title("Collapse sidebar to icons");
         rail.set_subtitle("Slim rail instead of full titles.");
         rail.set_active(*self.sidebar_rail.borrow());
+        rail.set_sensitive(*self.sidebar_visible.borrow());
         {
             let shell = self.clone();
             rail.connect_active_notify(move |row| {
-                shell.set_sidebar_collapsed(row.is_active());
+                if row.is_active() != *shell.sidebar_rail.borrow() {
+                    shell.set_sidebar_collapsed(row.is_active());
+                }
             });
         }
         group.add(&rail);
+        *self.settings_rail_row.borrow_mut() = Some(rail);
         page.add(&group);
         win.add(&page);
     }
@@ -4321,6 +4393,7 @@ impl Shell {
                         entry.meta.pinned = pinned;
                     }
                     s.refresh_sidebar();
+                    s.refresh_menu_labels();
                     s.toasts.add_toast(adw::Toast::new(if pinned {
                         "Tab pinned, exempt from parking"
                     } else {
@@ -4808,6 +4881,12 @@ fn install_theme() {
             border-radius: 0;
         }
 
+        /* Reading progress shares the hairline shape but whispers: a dim
+        currentColor wash next to the accent load bar. */
+        .hairline-dim progress {
+            background-color: color-mix(in srgb, currentColor 35%, transparent);
+        }
+
         .sidebar-row {
             border-radius: 10px;
             margin: 2px 0;
@@ -4817,9 +4896,20 @@ fn install_theme() {
             background: color-mix(in srgb, var(--accent-color, @accent_bg_color) 16%, transparent);
         }
 
+        .sidebar-row-active:hover {
+            background: color-mix(in srgb, var(--accent-color, @accent_bg_color) 24%, transparent);
+        }
+
+        /* Selected pinned tabs share the row selection language instead of
+        a filled accent button. */
+        .sidebar-pin-active {
+            background: color-mix(in srgb, var(--accent-color, @accent_bg_color) 16%, transparent);
+            border-radius: 10px;
+        }
+
         .sidebar-badge {
             font-size: 11px;
-            opacity: 0.65;
+            opacity: 0.85;
         }
 
         .sidebar-dot {
@@ -4949,6 +5039,11 @@ fn build_ui(app: &adw::Application) {
     key_btn.add_css_class("flat");
     key_btn.set_visible(false);
 
+    // Star button for the current page, kept in sync on every switch.
+    let star_btn = gtk4::Button::from_icon_name("non-starred-symbolic");
+    star_btn.set_tooltip_text(Some("Bookmark this page (Ctrl+D)"));
+    star_btn.add_css_class("flat");
+
     /// One shared engine menu: the address-bar picker and the hamburger
     /// submenu show the same items, so they can never disagree.
     fn engine_menu_model() -> gio::Menu {
@@ -4975,10 +5070,11 @@ fn build_ui(app: &adw::Application) {
     omnibox_box.add_css_class("omnibox-frame");
     omnibox_box.set_hexpand(true);
     omnibox_box.set_size_request(-1, 40);
-    // The bar keeps a single address field, the engine picker badge, and
-    // the contextual key icon (hidden unless the page has a login form).
-    // Everything else lives in the hamburger menu.
+    // The bar keeps a single address field, the bookmark star, the engine
+    // picker badge, and the contextual key icon (hidden unless the page
+    // has a login form). Everything else lives in the hamburger menu.
     omnibox_box.append(&entry);
+    omnibox_box.append(&star_btn);
     let engine_btn = gtk4::MenuButton::new();
     engine_btn.set_label(prefs.borrow().engine.name());
     engine_btn.set_tooltip_text(Some("Search engine (address bar + start page)"));
@@ -4986,35 +5082,48 @@ fn build_ui(app: &adw::Application) {
     omnibox_box.append(&engine_btn);
     omnibox_box.append(&key_btn);
 
-    // Single hamburger menu: every lesser-used action stays reachable with
-    // its shortcut intact. The bar itself keeps back, forward, reload, the
-    // address field, and this one menu button plus the sidebar toggle.
+    // Grouped hamburger menu: tabs, find, zoom, engine, page tools,
+    // session, view, settings. Quit stands alone at the end.
     let menu = gio::Menu::new();
-    menu.append(Some("New Tab"), Some("win.new-tab"));
-    menu.append(Some("Bookmark This Page"), Some("win.bookmark-page"));
-    menu.append(Some("Bookmarks…"), Some("win.show-bookmarks"));
-    menu.append(Some("Find in Page"), Some("win.find"));
-    menu.append(Some("Command Palette"), Some("win.palette"));
-    menu.append(Some("Zoom In"), Some("win.zoom-in"));
-    menu.append(Some("Zoom Out"), Some("win.zoom-out"));
-    menu.append(Some("Reset Zoom"), Some("win.zoom-reset"));
+    let tabs = gio::Menu::new();
+    tabs.append(Some("New Tab"), Some("win.new-tab"));
+    tabs.append(Some("Reopen Closed Tab"), Some("win.reopen-tab"));
+    tabs.append(Some("Close Tab"), Some("win.close-tab"));
+    let pin_item = gio::MenuItem::new(Some("Pin Tab"), Some("win.toggle-pin"));
+    tabs.append_item(&pin_item);
+    tabs.append(Some("Move Tab Up"), Some("win.move-tab-up"));
+    tabs.append(Some("Move Tab Down"), Some("win.move-tab-down"));
+    menu.append_section(None, &tabs);
+    let find = gio::Menu::new();
+    find.append(Some("Find in Page"), Some("win.find"));
+    find.append(Some("Command Palette"), Some("win.palette"));
+    menu.append_section(None, &find);
+    let zoom = gio::Menu::new();
+    zoom.append(Some("Zoom In"), Some("win.zoom-in"));
+    zoom.append(Some("Zoom Out"), Some("win.zoom-out"));
+    zoom.append(Some("Reset Zoom"), Some("win.zoom-reset"));
+    menu.append_section(None, &zoom);
     menu.append_submenu(Some("Search Engine"), &engine_menu_model());
-    menu.append(Some("Reopen Closed Tab"), Some("win.reopen-tab"));
-    menu.append(Some("Close Tab"), Some("win.close-tab"));
-    menu.append(Some("Pin Tab"), Some("win.toggle-pin"));
-    menu.append(Some("Move Tab Up"), Some("win.move-tab-up"));
-    menu.append(Some("Move Tab Down"), Some("win.move-tab-down"));
-    menu.append(Some("Copy Address"), Some("win.copy-url"));
-    menu.append(Some("History"), Some("win.history"));
-    menu.append(Some("Restore Previous Session"), Some("win.restore-prev"));
-    menu.append(Some("Restore Tabs on Startup"), Some("win.restore-session"));
-    menu.append(Some("Blocker for This Site"), Some("win.toggle-shield"));
-    menu.append(Some("Reader Mode"), Some("win.reader"));
-    menu.append(Some("Pop Out Video"), Some("win.popout"));
-    menu.append(Some("Hide Element on Site"), Some("win.curtain-pick"));
-    menu.append(Some("Unhide All on Site"), Some("win.curtain-clear"));
-    menu.append(Some("Sidebar"), Some("win.toggle-sidebar"));
-    menu.append(Some("Focus Mode"), Some("win.focus-mode"));
+    let page = gio::Menu::new();
+    page.append(Some("Bookmark This Page"), Some("win.bookmark-page"));
+    page.append(Some("Bookmarks…"), Some("win.show-bookmarks"));
+    page.append(Some("Copy Address"), Some("win.copy-url"));
+    let shield_item = gio::MenuItem::new(Some("Blocker for This Site"), Some("win.toggle-shield"));
+    page.append_item(&shield_item);
+    page.append(Some("Reader Mode"), Some("win.reader"));
+    page.append(Some("Pop Out Video"), Some("win.popout"));
+    page.append(Some("Hide Element on Site"), Some("win.curtain-pick"));
+    page.append(Some("Unhide All on Site"), Some("win.curtain-clear"));
+    menu.append_section(None, &page);
+    let history_menu = gio::Menu::new();
+    history_menu.append(Some("History"), Some("win.history"));
+    history_menu.append(Some("Restore Previous Session"), Some("win.restore-prev"));
+    history_menu.append(Some("Restore Tabs on Startup"), Some("win.restore-session"));
+    menu.append_section(None, &history_menu);
+    let view = gio::Menu::new();
+    view.append(Some("Sidebar"), Some("win.toggle-sidebar"));
+    view.append(Some("Focus Mode"), Some("win.focus-mode"));
+    menu.append_section(None, &view);
     menu.append(Some("Settings…"), Some("win.settings"));
     menu.append(Some("Quit"), Some("win.quit"));
     let menu_btn = gtk4::MenuButton::builder()
@@ -5039,8 +5148,10 @@ fn build_ui(app: &adw::Application) {
     progress.set_visible(false);
 
     // Thin reading-progress line under the active tab, driven by scroll.
+    // Dimmer than the accent load bar by design, so the two never confuse.
     let read_progress = gtk4::ProgressBar::new();
     read_progress.add_css_class("hairline-progress");
+    read_progress.add_css_class("hairline-dim");
     read_progress.set_visible(false);
 
     // Vertical tab sidebar in a slide revealer: the show/hide animation is
@@ -5208,6 +5319,7 @@ fn build_ui(app: &adw::Application) {
         progress,
         read_progress,
         key_btn,
+        star_btn: star_btn.clone(),
         engine_btn: engine_btn.clone(),
         find_bar: find_bar.clone(),
         find_entry: find_entry.clone(),
@@ -5232,6 +5344,10 @@ fn build_ui(app: &adw::Application) {
         palette_entry: palette_entry.clone(),
         palette_list: palette_list.clone(),
         palette_store: RefCell::new(Vec::new()),
+        pin_item: pin_item.clone(),
+        shield_item: shield_item.clone(),
+        settings_sidebar_row: RefCell::new(None),
+        settings_rail_row: RefCell::new(None),
         sidebar_pages: RefCell::new(Vec::new()),
         sidebar_visible: RefCell::new(prefs.borrow().sidebar_visible),
         sidebar_rail: RefCell::new(prefs.borrow().sidebar_collapsed),
@@ -5334,6 +5450,13 @@ fn build_ui(app: &adw::Application) {
         btn.connect_clicked(move |_| {
             s.rebuild_key_pop();
             pop.popup();
+        });
+    }
+    {
+        let s = shell.clone();
+        let btn = s.star_btn.clone();
+        btn.connect_clicked(move |_| {
+            s.toggle_bookmark();
         });
     }
     {
