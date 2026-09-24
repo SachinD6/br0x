@@ -76,7 +76,10 @@ curl -fsSL https://raw.githubusercontent.com/SachinD6/br0x/main/scripts/quick-in
 ```
 
 It detects Arch, Fedora, Ubuntu and Debian, installs the build tools,
-then builds and registers the app. Ubuntu and Debian take the Flatpak
+then builds and registers the app. On Arch it runs a full system upgrade
+first, which Arch requires before installing anything new; the GStreamer
+media packages stay best-effort so a media-stack conflict never aborts
+the install. Ubuntu and Debian take the Flatpak
 build instead, since their system GTK is older than this codebase needs.
 Other options:
 

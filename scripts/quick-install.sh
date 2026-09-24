@@ -63,9 +63,14 @@ fi
 
 # Native build: system GTK stack plus Rust.
 if have pacman; then
-  say "Arch detected: installing build tools"
-  $SUDO pacman -Sy --noconfirm --needed base-devel pkgconf gtk4 libadwaita webkitgtk-6.0 \
-    gst-plugins-good gst-libav gst-plugins-bad git curl
+  # Arch breaks on partial upgrades (new gstreamer libs against old ones is
+  # the classic case), so upgrade first, then install. Media packages stay
+  # best-effort: the browser builds and runs without them, only audio/video
+  # pages suffer, so they must never abort the install.
+  say "Arch detected: upgrading the system, then installing build tools"
+  $SUDO pacman -Syu --needed base-devel pkgconf gtk4 libadwaita webkitgtk-6.0 git curl
+  $SUDO pacman -Sy --needed gst-plugins-good gst-libav gst-plugins-bad \
+    || say "media packages skipped: pages with audio/video may not play"
 elif have dnf; then
   say "Fedora detected: installing build tools"
   $SUDO dnf install -y gcc pkgconf gtk4-devel libadwaita-devel webkitgtk6.0-devel git curl
