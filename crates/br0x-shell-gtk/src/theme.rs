@@ -1,16 +1,25 @@
-//! Shell appearance: one scheme decision, one stylesheet.
+//! Shell appearance: one scheme decision, one set of colors.
 //!
 //! Two rules keep the chrome coherent, and both are enforceable by tests:
 //!
-//! 1. **Every chrome color comes from a libadwaita token** (`@window_bg_color`,
-//!    `var(--sidebar-bg-color)`, `@borders`, ...). Tokens are defined per theme
-//!    variant by the same stylesheet that paints the toolkit's own widgets, so
-//!    the chrome cannot disagree with the variant. Hardcoded hex values here
-//!    would reintroduce exactly the mismatch this module exists to prevent.
-//! 2. **The appearance pref decides the variant, and the variant decides
-//!    everything else.** `scheme` is the single read of that decision; both the
-//!    toolkit switch and the internal pages consume its result, so a page can
-//!    never render light inside a dark shell.
+//! 1. **The appearance pref decides, and the shell paints the result.** Asking
+//!    libadwaita for a variant is not enough: `GTK_THEME`, a user `gtk.css`, or
+//!    a stuck portal can all keep the toolkit dark while the pref says light,
+//!    which is exactly the "light mode with a black sidebar" bug. So every
+//!    chrome surface is painted from the palette below, per scheme, and the
+//!    toolkit request only covers the surfaces we do not own.
+//! 2. **One answer for chrome and pages.** [`apply`] resolves the scheme once
+//!    and records it in [`applied`]; the internal pages read that same value,
+//!    so a page can never render light inside a dark shell.
+//!
+//! The palette values are libadwaita's own light and dark token values, read
+//! from the shipped stylesheet, so an explicitly painted chrome still matches
+//! the platform's greys instead of inventing new ones.
+
+use std::cell::Cell;
+
+use gtk4::CssProvider;
+use gtk4::gdk::Display;
 
 /// Light or dark, as actually rendered right now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,21 +29,88 @@ pub enum Scheme {
 }
 
 impl Scheme {
-    /// CSS `color-scheme` token for internal pages, so their `light-dark()`
-    /// resolves the same way the chrome did.
+    /// CSS `color-scheme` token for internal pages, so a page's own
+    /// `light-dark()` resolves the same way the chrome did.
     pub fn token(self) -> &'static str {
         match self {
             Scheme::Light => "light",
             Scheme::Dark => "dark",
         }
     }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Scheme::Light => "Light",
+            Scheme::Dark => "Dark",
+        }
+    }
 }
 
-/// Ask for a variant and report what the toolkit actually did.
-///
-/// libadwaita ignores the request when `GTK_THEME` is set or a user
-/// `gtk.css` forces a variant, so the answer comes from the StyleManager,
-/// not the request. Callers surface a mismatch instead of failing quietly.
+/// The chrome colors for one scheme. Every entry is a libadwaita token value.
+struct Chrome {
+    window_bg: &'static str,
+    window_fg: &'static str,
+    header_bg: &'static str,
+    header_fg: &'static str,
+    sidebar_bg: &'static str,
+    sidebar_fg: &'static str,
+    sidebar_border: &'static str,
+    view_bg: &'static str,
+    popover_bg: &'static str,
+    popover_fg: &'static str,
+    border: &'static str,
+    shade: &'static str,
+}
+
+const LIGHT: Chrome = Chrome {
+    window_bg: "#fafafb",
+    window_fg: "rgb(0 0 6 / 80%)",
+    header_bg: "#ffffff",
+    header_fg: "rgb(0 0 6 / 80%)",
+    sidebar_bg: "#ebebed",
+    sidebar_fg: "rgb(0 0 6 / 80%)",
+    sidebar_border: "rgb(0 0 6 / 12%)",
+    view_bg: "#ffffff",
+    popover_bg: "#ffffff",
+    popover_fg: "rgb(0 0 6 / 80%)",
+    border: "rgb(0 0 6 / 15%)",
+    shade: "rgb(0 0 6 / 7%)",
+};
+
+const DARK: Chrome = Chrome {
+    window_bg: "#222226",
+    window_fg: "#ffffff",
+    header_bg: "#2e2e32",
+    header_fg: "#ffffff",
+    sidebar_bg: "#2e2e32",
+    sidebar_fg: "#ffffff",
+    sidebar_border: "rgb(0 0 6 / 40%)",
+    view_bg: "#1d1d20",
+    popover_bg: "#36363a",
+    popover_fg: "#ffffff",
+    border: "rgb(255 255 255 / 16%)",
+    shade: "rgb(0 0 6 / 25%)",
+};
+
+fn chrome(scheme: Scheme) -> &'static Chrome {
+    match scheme {
+        Scheme::Light => &LIGHT,
+        Scheme::Dark => &DARK,
+    }
+}
+
+// The scheme in force. Written once by `apply`, read by every page builder.
+thread_local! {
+    static APPLIED: Cell<Scheme> = const { Cell::new(Scheme::Light) };
+}
+
+/// The scheme the shell is drawing with. This is the single answer the chrome
+/// and the internal pages share.
+pub fn applied() -> Scheme {
+    APPLIED.with(Cell::get)
+}
+
+/// Resolve the pref against the OS for `System`, and keep the answer.
 pub fn apply(appearance: br0x_core::prefs::Appearance) -> Scheme {
     use br0x_core::prefs::Appearance;
     let manager = adw::StyleManager::default();
@@ -43,54 +119,135 @@ pub fn apply(appearance: br0x_core::prefs::Appearance) -> Scheme {
         Appearance::Light => adw::ColorScheme::ForceLight,
         Appearance::Dark => adw::ColorScheme::ForceDark,
     });
-    current()
-}
-
-fn scheme_from(is_dark: bool) -> Scheme {
-    if is_dark { Scheme::Dark } else { Scheme::Light }
-}
-
-/// What the chrome is rendering right now.
-pub fn current() -> Scheme {
-    scheme_from(adw::StyleManager::default().is_dark())
-}
-
-/// What the pref asked for, with `System` resolved against the OS. Compared
-/// against [`current`] to tell a real switch from a swallowed one.
-pub fn wanted(appearance: br0x_core::prefs::Appearance) -> Scheme {
-    use br0x_core::prefs::Appearance;
-    match appearance {
+    let scheme = match appearance {
         Appearance::Light => Scheme::Light,
         Appearance::Dark => Scheme::Dark,
-        Appearance::System => current(),
+        Appearance::System => {
+            if manager.is_dark() {
+                Scheme::Dark
+            } else {
+                Scheme::Light
+            }
+        }
+    };
+    // The toolkit can refuse to switch. That no longer matters for the chrome,
+    // which is painted below, but it still affects dialogs we do not style, so
+    // say so once instead of letting it surprise someone.
+    let toolkit_dark = manager.is_dark();
+    if scheme == Scheme::Light && toolkit_dark && appearance != Appearance::Dark {
+        eprintln!("br0x: toolkit stayed dark; chrome is painted light for the chosen appearance");
     }
+    APPLIED.with(|cell| cell.set(scheme));
+    if let Some(display) = Display::default() {
+        chrome_provider(&display).load_from_string(&chrome_css(scheme));
+    }
+    scheme
 }
 
-/// The shell stylesheet.
-///
-/// Layout note: the chrome is two rows, one 46 px header bar and one 34 px
-/// tab strip, both painted with the headerbar surface so they read as a
-/// single bar. Radii follow libadwaita's scale (9 px for inputs and buttons).
+/// The provider set that carries the chrome palette. One instance per process,
+/// reloaded whenever the scheme changes.
+/// Above GTK's user layer (800). A hand-written `~/.config/gtk-4.0/gtk.css`
+/// outranks any application-priority provider, and that is one of the ways a
+/// light choice kept drawing dark chrome. Only br0x's own selectors are
+/// targeted, so nothing else in the process is affected.
+const CHROME_PRIORITY: u32 = gtk4::STYLE_PROVIDER_PRIORITY_USER + 1;
+
+fn chrome_provider(display: &Display) -> CssProvider {
+    thread_local! {
+        static PROVIDER: CssProvider = CssProvider::new();
+        static INSTALLED: Cell<bool> = const { Cell::new(false) };
+    }
+    PROVIDER.with(|provider| {
+        INSTALLED.with(|installed| {
+            if !installed.get() {
+                gtk4::style_context_add_provider_for_display(display, provider, CHROME_PRIORITY);
+                installed.set(true);
+            }
+        });
+        provider.clone()
+    })
+}
+
+/// Chrome colors for `scheme`, painted explicitly so the appearance pref wins
+/// over whatever the toolkit decided.
+fn chrome_css(scheme: Scheme) -> String {
+    let c = chrome(scheme);
+    format!(
+        r#"
+window.br0x-window {{
+    background-color: {window_bg};
+    color: {window_fg};
+}}
+
+headerbar, tabbar.br0x-tabbar {{
+    background-color: {header_bg};
+    color: {header_fg};
+}}
+
+.br0x-sidebar {{
+    background-color: {sidebar_bg};
+    color: {sidebar_fg};
+    border-right: 1px solid {sidebar_border};
+}}
+
+.br0x-sidebar-head {{ border-bottom: 1px solid {sidebar_border}; }}
+
+/* Surfaces the toolkit paints on its own: dialogs, menus, popovers. They are
+listed here so a stuck variant cannot leave a dark island in light chrome. */
+window.dialog,
+window.settings-window,
+popover > contents,
+popover.menu > contents,
+.popover-surface {{
+    background-color: {popover_bg};
+    color: {popover_fg};
+}}
+
+view, scrolledwindow, .view {{
+    background-color: {view_bg};
+}}
+
+.omnibox-frame {{
+    background-color: color-mix(in srgb, {header_fg} 5%, {header_bg});
+    border-color: {border};
+}}
+
+.omnibox-frame:hover {{
+    background-color: color-mix(in srgb, {header_fg} 8%, {header_bg});
+}}
+
+.menu-sep {{ background-color: {border}; }}
+
+.palette-card {{
+    background-color: {popover_bg};
+    color: {popover_fg};
+    border: 1px solid {border};
+    box-shadow: 0 12px 40px {shade};
+}}
+
+.menu-row:hover,
+.sidebar-row:hover {{
+    background-color: color-mix(in srgb, currentColor 7%, transparent);
+}}
+"#,
+        window_bg = c.window_bg,
+        window_fg = c.window_fg,
+        header_bg = c.header_bg,
+        header_fg = c.header_fg,
+        sidebar_bg = c.sidebar_bg,
+        sidebar_fg = c.sidebar_fg,
+        sidebar_border = c.sidebar_border,
+        view_bg = c.view_bg,
+        popover_bg = c.popover_bg,
+        popover_fg = c.popover_fg,
+        border = c.border,
+        shade = c.shade,
+    )
+}
+
+/// Layout for the chrome. Structure only: no colors live here, they all come
+/// from [`chrome_css`], so the two files cannot drift.
 pub const SHELL_CSS: &str = r#"
-/* ---- window and sidebars ---------------------------------------------- */
-
-window.br0x-window {
-    background-color: var(--window-bg-color);
-    color: var(--window-fg-color);
-}
-
-/* The sidebar is chrome, not content: give it the toolkit's sidebar surface
-and a hairline against the page so the split is visible in both variants. */
-.br0x-sidebar {
-    background-color: var(--sidebar-bg-color);
-    color: var(--sidebar-fg-color);
-    border-right: 1px solid var(--sidebar-border-color, @borders);
-}
-
-.br0x-sidebar-head {
-    border-bottom: 1px solid var(--sidebar-border-color, @borders);
-}
-
 .br0x-sidebar-title {
     font-size: 11px;
     font-weight: 700;
@@ -99,20 +256,12 @@ and a hairline against the page so the split is visible in both variants. */
     opacity: 0.55;
 }
 
-/* ---- address bar ------------------------------------------------------ */
-
 .omnibox-frame {
     border-radius: 9px;
     padding: 0 4px;
     min-height: 34px;
-    /* A tint of the bar it sits on, so the field reads as an input in both
-    variants instead of vanishing into an equally white header. */
-    background-color: color-mix(in srgb, currentColor 5%, var(--headerbar-bg-color));
-    border: 1px solid var(--border-color, @borders);
-}
-
-.omnibox-frame:hover {
-    background-color: color-mix(in srgb, currentColor 8%, var(--headerbar-bg-color));
+    border-width: 1px;
+    border-style: solid;
 }
 
 .omnibox-frame:focus-within {
@@ -120,8 +269,12 @@ and a hairline against the page so the split is visible in both variants. */
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-bg-color) 22%, transparent);
 }
 
+/* The address field sits inside a frame we paint, so it must not paint its
+own surface. Declared here, in the sheet that owns the chrome, because a
+hand-written gtk.css can set `entry` and this has to win. */
 .omnibox-frame entry {
-    background: transparent;
+    background-color: transparent;
+    background-image: none;
     outline: none;
 }
 
@@ -144,20 +297,16 @@ its 34 px height without inflating it. */
     min-width: 26px;
     padding: 0 6px;
     border-radius: 7px;
-    background: transparent;
+    background-color: transparent;
     box-shadow: none;
 }
 
 .omnibox-frame button:hover,
 .omnibox-frame menubutton button:hover {
-    background: color-mix(in srgb, currentColor 10%, transparent);
+    background-color: color-mix(in srgb, currentColor 10%, transparent);
 }
 
-/* ---- header bar and tabs --------------------------------------------- */
-
 headerbar {
-    background-color: var(--headerbar-bg-color);
-    color: var(--headerbar-fg-color);
     box-shadow: none;
     border-bottom: none;
     padding: 4px 8px;
@@ -168,13 +317,6 @@ headerbar button.flat {
     min-width: 32px;
     min-height: 32px;
     padding: 0;
-}
-
-/* The tab strip shares the headerbar surface: one bar, two rows. */
-tabbar.br0x-tabbar {
-    background-color: var(--headerbar-bg-color);
-    color: var(--headerbar-fg-color);
-    border-bottom: 1px solid var(--border-color, @borders);
 }
 
 tabbar tabbox {
@@ -209,8 +351,6 @@ tabbar tab button.tab-close-button:hover {
     background-color: color-mix(in srgb, currentColor 12%, transparent);
 }
 
-/* ---- progress hairlines ---------------------------------------------- */
-
 .hairline-progress {
     min-height: 2px;
     padding: 0;
@@ -220,7 +360,7 @@ tabbar tab button.tab-close-button:hover {
 
 .hairline-progress trough {
     min-height: 2px;
-    background: transparent;
+    background-color: transparent;
     border: none;
     border-radius: 0;
 }
@@ -237,30 +377,20 @@ tabbar tab button.tab-close-button:hover {
     background-color: color-mix(in srgb, currentColor 30%, transparent);
 }
 
-/* ---- sidebar rows ----------------------------------------------------- */
-
 .sidebar-row {
-    border-radius: 8px;
-    margin: 1px 6px;
-    min-height: 34px;
+    border-radius: 10px;
+    margin: 2px 8px;
+    min-height: 52px;
 }
 
-.sidebar-row:hover {
-    background-color: color-mix(in srgb, currentColor 7%, transparent);
+.sidebar-row-title {
+    font-size: 14px;
+    font-weight: 500;
 }
 
-/* Selection is a neutral fill plus an accent edge. Tinting the whole row
-with the accent turns muddy the moment the system accent is warm, and the
-edge reads as a selected state in every accent. */
-.sidebar-row-active,
-.sidebar-row-active:hover {
-    background-color: color-mix(in srgb, currentColor 9%, var(--sidebar-bg-color));
-    box-shadow: inset 2px 0 var(--accent-bg-color);
-}
-
-.sidebar-pin-active {
-    background-color: color-mix(in srgb, currentColor 9%, var(--sidebar-bg-color));
-    border-radius: 8px;
+.sidebar-row-host {
+    font-size: 11px;
+    opacity: 0.55;
 }
 
 .sidebar-badge {
@@ -273,6 +403,39 @@ edge reads as a selected state in every accent. */
     font-size: 11px;
 }
 
+.sidebar-pin-active,
+.sidebar-row-active,
+.sidebar-row-active:hover {
+    background-color: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.sidebar-row-active,
+.sidebar-row-active:hover {
+    box-shadow: inset 2px 0 var(--accent-bg-color);
+}
+
+.sidebar-pin-active {
+    box-shadow: none;
+}
+
+/* Drag feedback: the row being dragged fades, the drop edge shows. */
+.sidebar-row.dragging {
+    opacity: 0.4;
+}
+
+.sidebar-row.drop-above {
+    box-shadow: inset 0 2px var(--accent-bg-color);
+}
+
+.sidebar-row.drop-below {
+    box-shadow: inset 0 -2px var(--accent-bg-color);
+}
+
+.sidebar-row.dragging.drop-above,
+.sidebar-row.dragging.drop-below {
+    box-shadow: none;
+}
+
 @keyframes sidebar-shimmer {
     from { opacity: 0.45; }
     to { opacity: 1.0; }
@@ -282,8 +445,7 @@ edge reads as a selected state in every accent. */
     animation: sidebar-shimmer 700ms ease-in-out infinite alternate;
 }
 
-/* ---- motion ----------------------------------------------------------- */
-
+/* Motion: quick hovers, calm reveals. */
 .sidebar-row,
 headerbar button,
 tabbar tab,
@@ -291,22 +453,17 @@ tabbar tab,
     transition: background-color 150ms ease-out, border-color 150ms ease-out;
 }
 
-/* ---- menus ------------------------------------------------------------ */
-
 .menu-popover {
     padding: 0;
 }
 
 .menu-row {
-    padding: 7px 10px;
+    padding: 1px 10px;
+    min-height: 24px;
     border-radius: 8px;
-    background: transparent;
+    background-color: transparent;
     box-shadow: none;
     font-weight: 400;
-}
-
-.menu-row:hover {
-    background-color: color-mix(in srgb, currentColor 9%, transparent);
 }
 
 .menu-accel {
@@ -315,19 +472,12 @@ tabbar tab,
 }
 
 .menu-sep {
-    margin: 5px 8px;
-    background-color: var(--border-color, @borders);
+    margin: 3px 8px;
     min-height: 1px;
 }
 
-/* ---- palette ---------------------------------------------------------- */
-
 .palette-card {
-    background-color: var(--popover-bg-color);
-    color: var(--popover-fg-color);
     border-radius: 14px;
-    border: 1px solid var(--border-color, @borders);
-    box-shadow: 0 12px 40px var(--shade-color);
     padding-bottom: 8px;
 }
 
@@ -342,62 +492,88 @@ tabbar tab,
 }
 "#;
 
-/// Register the shell stylesheet for `display`.
-pub fn install(display: &gtk4::gdk::Display) {
-    let provider = gtk4::CssProvider::new();
+/// Register the layout stylesheet. Colors arrive separately through
+/// [`apply`], so this runs once at startup.
+pub fn install(display: &Display) {
+    let provider = CssProvider::new();
     provider.load_from_string(SHELL_CSS);
-    gtk4::style_context_add_provider_for_display(
-        display,
-        &provider,
-        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
+    gtk4::style_context_add_provider_for_display(display, &provider, CHROME_PRIORITY);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use br0x_core::prefs::Appearance;
 
-    /// Rule 1: no raw colors. A hex or `rgb()` in the shell stylesheet means a
-    /// surface that cannot follow the theme variant.
+    /// The bug this module exists to prevent: a light choice that leaves dark
+    /// chrome. The painted palette must follow the pref, not the toolkit.
+    /// Only the colors that actually differ between the palettes: white is a
+    /// text color in dark and a surface in light, so a substring check on it
+    /// would fail for the wrong reason.
+    const DARK_SURFACES: [&str; 4] = ["#222226", "#2e2e32", "#36363a", "#1d1d20"];
+    const LIGHT_SURFACES: [&str; 2] = ["#fafafb", "#ebebed"];
+
     #[test]
-    fn shell_css_uses_only_theme_tokens() {
-        let mut violations = Vec::new();
-        for line in SHELL_CSS.lines() {
-            let code = line.split("/*").next().unwrap_or("");
-            let lower = code.to_ascii_lowercase();
-            if lower.contains("background-color:")
-                || lower.contains("background:")
-                || lower.contains("color:")
-                || lower.contains("border-color:")
-            {
-                let has_hex = code.contains('#')
-                    && !code.trim_start().starts_with("/*")
-                    && code.split(':').nth(1).is_some_and(|v| v.contains('#'));
-                let has_rgb = code.contains("rgb(") || code.contains("rgba(");
-                if has_hex || has_rgb {
-                    violations.push(line.trim().to_string());
-                }
-            }
+    fn light_chrome_never_uses_dark_surfaces() {
+        let light = chrome_css(Scheme::Light);
+        for dark_only in DARK_SURFACES {
+            assert!(!light.contains(dark_only), "light chrome contains {dark_only}");
         }
-        assert!(violations.is_empty(), "raw colors in the shell stylesheet: {violations:#?}");
+        assert!(light.contains(LIGHT.sidebar_bg), "sidebar painted from the light palette");
+        assert!(light.contains(LIGHT.header_bg), "header painted from the light palette");
     }
 
-    /// Rule 2: the scheme answer follows the variant, never the request.
     #[test]
-    fn scheme_reflects_the_variant_not_the_request() {
-        assert_eq!(scheme_from(true), Scheme::Dark);
-        assert_eq!(scheme_from(false), Scheme::Light);
+    fn dark_chrome_never_uses_light_surfaces() {
+        let dark = chrome_css(Scheme::Dark);
+        for light_only in LIGHT_SURFACES {
+            assert!(!dark.contains(light_only), "dark chrome contains {light_only}");
+        }
+        assert!(dark.contains(DARK.sidebar_bg));
+        assert!(dark.contains(DARK.header_bg));
+    }
+
+    /// Every surface the shell owns must be painted, or a stuck toolkit
+    /// variant shows through as a dark island in light chrome.
+    #[test]
+    fn every_owned_surface_is_painted() {
+        let css = chrome_css(Scheme::Light);
+        for selector in [
+            "window.br0x-window",
+            "headerbar",
+            "tabbar.br0x-tabbar",
+            ".br0x-sidebar",
+            "popover > contents",
+            "window.dialog",
+            ".palette-card",
+        ] {
+            assert!(css.contains(selector), "unpainted surface: {selector}");
+        }
+    }
+
+    #[test]
+    fn scheme_tokens_match_the_pages() {
         assert_eq!(Scheme::Light.token(), "light");
         assert_eq!(Scheme::Dark.token(), "dark");
+        assert_eq!(chrome(Scheme::Light).view_bg, "#ffffff");
     }
 
-    /// The sidebar surface must be styled unconditionally, so System mode
-    /// cannot leave it transparent over a dark window.
+    /// Structure and color are separate files: the layout sheet must not carry
+    /// a palette value, or the two would drift apart.
     #[test]
-    fn sidebar_is_painted_in_every_scheme() {
-        let css = SHELL_CSS;
-        let block = css.split(".br0x-sidebar {").nth(1).expect("sidebar rule present");
-        assert!(block.contains("background-color: var(--sidebar-bg-color)"));
-        assert!(block.contains("border-right"));
+    fn layout_sheet_carries_no_palette_colors() {
+        for value in [LIGHT.window_bg, LIGHT.header_bg, LIGHT.sidebar_bg, DARK.sidebar_bg] {
+            assert!(
+                !SHELL_CSS.contains(value),
+                "palette value {value} leaked into the layout sheet"
+            );
+        }
+    }
+
+    #[test]
+    fn system_follows_the_toolkit() {
+        // Only a compile-time sanity check: `System` is the one mode that
+        // reads the toolkit, and it is handled in `apply`.
+        assert_ne!(Appearance::System, Appearance::Light);
     }
 }

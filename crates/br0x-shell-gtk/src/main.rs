@@ -160,6 +160,28 @@ fn xdg_home(dir: PathBuf, home_suffix: &str) -> PathBuf {
 /// `$XDG_DATA_HOME/br0x/<name>`, as a string for the APIs that take `&str`.
 /// file:// URL with the path percent-encoded: a space or non-ASCII word
 /// in $HOME must not break start-page identity checks elsewhere.
+/// Where a site's stored icon lives. The key is derived from the host, so
+/// the same site always maps to the same file and nothing user-supplied ever
+/// reaches the filesystem.
+pub(crate) fn favicon_path(key: &str) -> String {
+    data_file(&format!("favicons/{key}.png"))
+}
+
+/// Filesystem-safe key for a host: lowercase, no `www.`, and nothing outside
+/// `[a-z0-9.-]`. Ports, paths and traversal attempts all fold to `_`.
+pub fn favicon_key(host: &str) -> String {
+    let host = host.trim().trim_start_matches("www.").to_ascii_lowercase();
+    let mut key: String = host
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
+        .collect();
+    while key.starts_with('.') || key.starts_with('-') {
+        key.remove(0);
+    }
+    key.truncate(120);
+    key
+}
+
 pub(crate) fn file_url(path: &str) -> String {
     let mut encoded = String::with_capacity(path.len() + 7);
     for byte in path.bytes() {
@@ -270,11 +292,36 @@ fn history_request(uri: &str) -> (Option<String>, bool) {
 
 /// Serve br0x://history from the local database.
 fn register_br0x_scheme(context: &webkit6::WebContext, history: Rc<RefCell<Option<History>>>) {
+    // The start page is a file:// document that embeds stored icons, so the
+    // scheme has to be reachable from another origin.
+    if let Some(manager) = context.security_manager() {
+        manager.register_uri_scheme_as_cors_enabled("br0x");
+        manager.register_uri_scheme_as_secure("br0x");
+    }
     context.register_uri_scheme("br0x", move |request| {
         let uri = request.uri().map(|u| u.to_string()).unwrap_or_default();
+        if let Some(key) = uri.strip_prefix("br0x://favicon/") {
+            match std::fs::read(favicon_path(key)) {
+                Ok(png) => {
+                    let bytes = glib::Bytes::from_owned(png);
+                    let stream = gio::MemoryInputStream::from_bytes(&bytes);
+                    let response = webkit6::URISchemeResponse::new(&stream, bytes.len() as i64);
+                    response.set_content_type("image/png");
+                    request.finish_with_response(&response);
+                }
+                Err(_) => {
+                    let mut error = glib::Error::new(
+                        gio::IOErrorEnum::NotFound,
+                        "no icon stored for this site",
+                    );
+                    request.finish_error(&mut error);
+                }
+            }
+            return;
+        }
         let (query, clear) = history_request(&uri);
         let html = match history.borrow_mut().as_mut() {
-            Some(h) => pages::history_html(h, query.as_deref(), clear, crate::theme::current()),
+            Some(h) => pages::history_html(h, query.as_deref(), clear, crate::theme::applied()),
             None => "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
                 <style>:root{color-scheme:light dark}body{font-family:system-ui,sans-serif;\
                 display:flex;min-height:100vh;align-items:center;justify-content:center;\
@@ -1031,12 +1078,67 @@ struct Shell {
 struct SidebarItem {
     page: adw::TabPage,
     title: String,
+    /// Second line of the row: the site the tab is on, empty for a new tab.
+    host: String,
     pinned: bool,
     loading: bool,
     sleeping: bool,
     parked: bool,
     attention: bool,
     selected: bool,
+}
+
+/// Drag a sidebar row with the mouse to reorder its tab.
+///
+/// A drag gesture, not the XDND protocol: the row already knows where it sits
+/// and the pointer offset names the destination, so the reorder stays one
+/// function. The tab view performs the move, which keeps the tab strip, the
+/// session, and the sidebar in one order.
+fn wire_row_drag(row: &gtk4::ListBoxRow, page: &adw::TabPage, tab_view: &adw::TabView) {
+    let gesture = gtk4::GestureDrag::new();
+    gesture.set_button(1);
+    {
+        let row = row.clone();
+        gesture.connect_drag_begin(move |_, _, _| row.add_css_class("dragging"));
+    }
+    {
+        let row = row.clone();
+        let page = page.clone();
+        gesture.connect_drag_update(move |_, _, offset_y| {
+            let steps = row_steps(offset_y, row.height());
+            row.remove_css_class("drop-above");
+            row.remove_css_class("drop-below");
+            let _ = &page;
+            if steps != 0 {
+                row.add_css_class(if steps < 0 { "drop-above" } else { "drop-below" });
+            }
+        });
+    }
+    {
+        let row = row.clone();
+        let page = page.clone();
+        let view = tab_view.clone();
+        gesture.connect_drag_end(move |_, _, offset_y| {
+            row.remove_css_class("dragging");
+            row.remove_css_class("drop-above");
+            row.remove_css_class("drop-below");
+            let steps = row_steps(offset_y, row.height());
+            let from = view.page_position(&page);
+            if steps == 0 || from < 0 {
+                return;
+            }
+            let to = (from + steps).clamp(0, view.n_pages() - 1);
+            if to != from {
+                view.reorder_page(&page, to);
+            }
+        });
+    }
+    row.add_controller(gesture);
+}
+
+/// How many rows the pointer travelled, rounded to the nearest row.
+fn row_steps(offset_y: f64, row_height: i32) -> i32 {
+    (offset_y / row_height.max(1) as f64).round() as i32
 }
 
 impl Shell {
@@ -1094,7 +1196,7 @@ impl Shell {
     /// only when either changed since the last write. Returns its file URL.
     fn refresh_start_page(self: &Rc<Self>, engine: SearchEngine) -> String {
         let frequent = self.frequent_sites();
-        let scheme = theme::current();
+        let scheme = theme::applied();
         pages::sync_newtab_page(&self.last_newtab, engine, &frequent, scheme)
     }
 
@@ -1690,7 +1792,7 @@ impl Shell {
         let page = self.tab_view.selected_page();
         let shell = self.clone();
         let eval_view = view.clone();
-        let script = pages::reader_extract_js(theme::current());
+        let script = pages::reader_extract_js(theme::applied());
         eval_text(&eval_view, &script, move |html| {
             if html.is_empty() {
                 shell.toasts.add_toast(adw::Toast::new("No article found on this page"));
@@ -1899,6 +2001,18 @@ impl Shell {
                         SidebarItem {
                             page: e.page.clone(),
                             title: strip_state_badges(&e.page.title()),
+                            // A released tab sits on about:blank, so its
+                            // identity comes from the URL we parked it with.
+                            host: {
+                                let live = e.view.uri().map(|u| u.to_string()).unwrap_or_default();
+                                let real = if live.is_empty() || is_blank_uri(&live) {
+                                    e.meta.pending_url.clone().unwrap_or_default()
+                                } else {
+                                    live
+                                };
+                                let host = pages::display_domain(&real);
+                                if host == "local" { String::new() } else { host.to_owned() }
+                            },
                             pinned: e.page.is_pinned(),
                             loading: e.page.is_loading(),
                             sleeping: e.meta.sleeping,
@@ -1982,9 +2096,11 @@ impl Shell {
         }));
     }
 
-    /// One unpinned sidebar row: a single fixed-height line of unread dot,
     /// favicon, title, state badge, and close button. Nothing here may wrap
     /// or change the row metrics, so badges and dots never shift the layout.
+    /// One unpinned sidebar row: a two-line card of favicon, title over host,
+    /// state badge, and a close button that appears on hover. Nothing here may
+    /// wrap or change the row metrics, so badges never shift the layout.
     fn sidebar_row(&self, item: &SidebarItem, tab_view: &adw::TabView) -> gtk4::ListBoxRow {
         let rail = *self.sidebar_rail.borrow();
         let slot = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
@@ -2018,16 +2134,29 @@ impl Shell {
         // Rail rows carry no close button at all.
         let mut close_btn: Option<gtk4::Button> = None;
         if !rail {
+            let text = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+            text.set_hexpand(true);
+            text.set_valign(gtk4::Align::Center);
             let title = gtk4::Label::new(None);
             let name =
                 if item.title.is_empty() { "New Tab".to_owned() } else { item.title.clone() };
             title.set_text(&name);
             title.set_xalign(0.0);
             title.set_hexpand(true);
-            title.set_max_width_chars(34);
+            title.set_max_width_chars(30);
             title.set_ellipsize(gtk4::pango::EllipsizeMode::End);
-            title.set_valign(gtk4::Align::Center);
-            slot.append(&title);
+            title.add_css_class("sidebar-row-title");
+            text.append(&title);
+            if !item.host.is_empty() {
+                let host = gtk4::Label::new(Some(&item.host));
+                host.set_xalign(0.0);
+                host.set_hexpand(true);
+                host.set_max_width_chars(30);
+                host.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+                host.add_css_class("sidebar-row-host");
+                text.append(&host);
+            }
+            slot.append(&text);
             let badge = if item.sleeping {
                 "Sleeping"
             } else if item.parked {
@@ -2041,7 +2170,7 @@ impl Shell {
                 let badge_label = gtk4::Label::new(Some(badge));
                 badge_label.set_valign(gtk4::Align::Center);
                 badge_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
-                badge_label.set_max_width_chars(10);
+                badge_label.set_max_width_chars(9);
                 badge_label.add_css_class("sidebar-badge");
                 slot.append(&badge_label);
             }
@@ -2062,6 +2191,7 @@ impl Shell {
         }
         let row = gtk4::ListBoxRow::new();
         row.set_child(Some(&slot));
+        wire_row_drag(&row, &item.page, tab_view);
         // Hover or keyboard focus reveals the close button. Driven here,
         // not in CSS: a hidden widget takes no clicks, opacity would not.
         if let Some(close) = close_btn {
@@ -2176,7 +2306,7 @@ impl Shell {
         *self.sidebar_rail.borrow_mut() = rail;
         self.prefs.borrow_mut().sidebar_collapsed = rail;
         self.save_prefs();
-        self.sidebar_box.set_size_request(if rail { 56 } else { 260 }, -1);
+        self.sidebar_box.set_size_request(if rail { 60 } else { 280 }, -1);
         if let Some(row) = self.settings_rail_row.borrow().as_ref() {
             row.set_active(rail);
         }
@@ -2213,17 +2343,18 @@ impl Shell {
         self.prefs.borrow_mut().appearance = appearance;
         self.save_prefs();
         let applied = theme::apply(appearance);
-        let verified = applied == theme::wanted(appearance);
         let engine = self.prefs.borrow().engine;
         self.refresh_start_page(engine);
         self.reload_start_pages();
         self.reload_history_pages();
-        let msg = if verified {
-            format!("Appearance: {}", appearance.name())
+        // The chrome is painted from the resolved scheme, so the toast names
+        // what was actually drawn rather than what was asked for.
+        let name = if appearance == Appearance::System {
+            format!("System ({})", applied.name())
         } else {
-            "Appearance saved, but the system theme overrode it — click again to retry".to_owned()
+            appearance.name().to_owned()
         };
-        self.toasts.add_toast(adw::Toast::new(&msg));
+        self.toasts.add_toast(adw::Toast::new(&format!("Appearance: {name}")));
     }
 
     /// Switch the sleep timeout; the 5 s policy tick picks it up from prefs.
@@ -2345,7 +2476,21 @@ impl Shell {
             if texture.width() == 0 || texture.height() == 0 {
                 return;
             }
-            let icon = gio::BytesIcon::new(&texture.save_to_png_bytes());
+            let png = texture.save_to_png_bytes();
+            // Keep a copy on disk so the start page and history can show the
+            // same icon later, offline and without a third-party request.
+            if let Some(uri) = v.uri() {
+                let key = favicon_key(&domain_of(uri.as_str()));
+                if !key.is_empty() && key != "local" {
+                    let path = favicon_path(&key);
+                    if let Some(dir) = std::path::Path::new(&path).parent()
+                        && std::fs::create_dir_all(dir).is_ok()
+                    {
+                        let _ = std::fs::write(&path, png.as_ref());
+                    }
+                }
+            }
+            let icon = gio::BytesIcon::new(&png);
             page_clone.set_icon(Some(&icon));
             if let Some(shell) = shell_weak.upgrade() {
                 shell.refresh_sidebar();
@@ -2486,7 +2631,7 @@ impl Shell {
                             "Could not open this page",
                             "Check the address and your connection, then try again.",
                             uri,
-                            theme::current(),
+                            theme::applied(),
                         ),
                         uri,
                         None,
@@ -2502,15 +2647,22 @@ impl Shell {
             // Parking terminates the process on purpose; only crashes and OOM
             // kills are worth telling the user about.
             if reason != webkit6::WebProcessTerminationReason::TerminatedByApi {
-                toasts_crashed.add_toast(adw::Toast::new("Page crashed"));
+                // Name the cause: a memory kill and a crash look identical in
+                // the UI otherwise, and they need different advice.
+                let (heading, message) = match reason {
+                    webkit6::WebProcessTerminationReason::ExceededMemoryLimit => (
+                        "This page ran out of memory",
+                        "The page needed more memory than the tab budget allows. Reload it, or close a few other tabs first. Your other tabs are safe.",
+                    ),
+                    _ => (
+                        "This page crashed",
+                        "The page hit a bug in its own code. Reload to try again. Your other tabs are safe.",
+                    ),
+                };
+                toasts_crashed.add_toast(adw::Toast::new(heading));
                 let uri = v.uri().map(|u| u.to_string()).unwrap_or_default();
                 v.load_alternate_html(
-                    &pages::error_html(
-                        "This page crashed",
-                        "The page used too much memory or hit a bug. Your other tabs are safe.",
-                        &uri,
-                        theme::current(),
-                    ),
+                    &pages::error_html(heading, message, &uri, theme::applied()),
                     &uri,
                     None,
                 );
@@ -3690,7 +3842,7 @@ fn build_ui(app: &adw::Application) {
         RefCell::new(None);
     {
         let loaded = prefs.borrow();
-        pages::sync_newtab_page(&last_newtab, loaded.engine, &[], theme::current());
+        pages::sync_newtab_page(&last_newtab, loaded.engine, &[], theme::applied());
     }
 
     let session = shared_session();
@@ -3965,7 +4117,7 @@ fn build_ui(app: &adw::Application) {
     sidebar_box.add_css_class("br0x-sidebar");
     // Width lives on the revealer's child: a request on the revealer itself
     // is a hard minimum even while hidden, permanently stealing 220 px.
-    sidebar_box.set_size_request(260, -1);
+    sidebar_box.set_size_request(280, -1);
     sidebar_box.append(&sidebar_head);
     sidebar_box.append(&sidebar_pins);
     sidebar_box.append(&sidebar_scroll);
@@ -4135,7 +4287,7 @@ fn build_ui(app: &adw::Application) {
         tabs: Rc::new(RefCell::new(Tabs::new())),
     });
     // Restore the persisted sidebar shape before first paint.
-    shell.sidebar_box.set_size_request(if *shell.sidebar_rail.borrow() { 56 } else { 260 }, -1);
+    shell.sidebar_box.set_size_request(if *shell.sidebar_rail.borrow() { 60 } else { 280 }, -1);
     shell.sidebar_reveal.set_reveal_child(*shell.sidebar_visible.borrow());
     shell.sync_header_sidebar_btn();
 
@@ -4538,6 +4690,16 @@ fn build_ui(app: &adw::Application) {
         tab_view.connect_selected_page_notify(move |_| {
             s.on_selection_changed();
             popover.popdown();
+        });
+    }
+    {
+        // Reordering happens from the strip, from a drag in the sidebar, and
+        // from the keyboard. The view is the source of truth, so the sidebar
+        // follows its signal instead of every caller remembering to refresh.
+        let s = shell.clone();
+        tab_view.connect_page_reordered(move |_, _, _| {
+            s.refresh_sidebar();
+            s.save_session();
         });
     }
     {
