@@ -2124,11 +2124,14 @@ struct Shell {
     last_newtab: RefCell<Option<(SearchEngine, Vec<Visit>, Appearance)>>,
     suggest_pop: gtk4::Popover,
     sidebar_reveal: gtk4::Revealer,
+    sidebar_box: gtk4::Box,
     sidebar_pins: gtk4::FlowBox,
     sidebar_list: gtk4::ListBox,
     sidebar_head_label: gtk4::Label,
     sidebar_collapse_btn: gtk4::Button,
     header_sidebar_btn: gtk4::Button,
+    /// Reloadable provider pinning chrome surfaces to the chosen scheme.
+    scheme_css: gtk4::CssProvider,
     sidebar_pages: RefCell<Vec<adw::TabPage>>,
     sidebar_visible: RefCell<bool>,
     sidebar_rail: RefCell<bool>,
@@ -2966,7 +2969,7 @@ impl Shell {
         *self.sidebar_rail.borrow_mut() = rail;
         self.prefs.borrow_mut().sidebar_collapsed = rail;
         self.save_prefs();
-        self.sidebar_reveal.set_size_request(if rail { 52 } else { 220 }, -1);
+        self.sidebar_box.set_size_request(if rail { 52 } else { 220 }, -1);
         self.refresh_sidebar();
     }
 
@@ -2988,19 +2991,23 @@ impl Shell {
     }
 
     /// Switch appearance, persist it, and apply it to the chrome plus every
-    /// internal page immediately.
+    /// internal page immediately. Always re-applies: if a previous switch
+    /// was swallowed by the toolkit, clicking the same mode retries it.
     fn set_appearance(self: &Rc<Self>, appearance: Appearance) {
-        if self.prefs.borrow().appearance == appearance {
-            return;
-        }
         self.prefs.borrow_mut().appearance = appearance;
         self.save_prefs();
-        apply_appearance(appearance);
+        self.scheme_css.load_from_string(&scheme_chrome_css(appearance));
+        let verified = apply_appearance(appearance);
         let engine = self.prefs.borrow().engine;
         self.refresh_start_page(engine);
         self.reload_start_pages();
         self.reload_history_pages();
-        self.toasts.add_toast(adw::Toast::new(&format!("Appearance: {}", appearance.name())));
+        let msg = if verified {
+            format!("Appearance: {}", appearance.name())
+        } else {
+            "Appearance saved, but the system theme overrode it — click again to retry".to_owned()
+        };
+        self.toasts.add_toast(adw::Toast::new(&msg));
     }
 
     /// Switch the sleep timeout; the 5 s policy tick picks it up from prefs.
@@ -3624,7 +3631,10 @@ impl Shell {
     /// rebuilt fresh on every open so rows never show stale prefs.
     #[allow(deprecated)]
     fn open_settings(self: &Rc<Self>) {
-        if let Some(win) = self.settings_win.borrow().as_ref() {
+        // Take the slot before closing: the borrow ends with this statement,
+        // so a synchronous close-request (which clears the same slot) can
+        // neither panic on a held borrow nor wipe the replacement window.
+        if let Some(win) = self.settings_win.borrow_mut().take() {
             win.close();
         }
         let win = SettingsWindow::new();
@@ -4399,10 +4409,11 @@ impl Shell {
 
 /// Apply the appearance pref to the whole shell chrome at once. The style
 /// manager switch is synchronous, so there is no flicker between themes.
-/// Verified by reading the switch back: libadwaita silently ignores the
-/// call when GTK_THEME is set (fixed by clearing it process-locally in
-/// main), so a mismatch is logged instead of failing quietly.
-fn apply_appearance(appearance: Appearance) {
+/// Returns whether the toolkit variant matches the request: libadwaita
+/// silently ignores the call when GTK_THEME is set (cleared process-locally
+/// in main) or a user gtk.css forces a variant, so callers must surface a
+/// mismatch instead of failing quietly.
+fn apply_appearance(appearance: Appearance) -> bool {
     let manager = adw::StyleManager::default();
     manager.set_color_scheme(match appearance {
         Appearance::System => adw::ColorScheme::Default,
@@ -4414,8 +4425,43 @@ fn apply_appearance(appearance: Appearance) {
         Appearance::Light => false,
         Appearance::Dark => true,
     };
-    if manager.is_dark() != want_dark {
+    let verified = manager.is_dark() == want_dark;
+    if !verified {
         eprintln!("br0x: appearance switch unverified (want dark={want_dark})");
+    }
+    verified
+}
+
+/// Chrome surfaces pinned to the chosen scheme, independent of the toolkit
+/// variant. Light stays light even when the style manager fails to flip
+/// (launcher GTK_THEME, user gtk.css): the header bar, sidebar, window,
+/// and omnibox carry explicit colors instead of inheriting a stuck variant.
+/// System pins nothing and follows the OS.
+fn scheme_chrome_css(appearance: Appearance) -> String {
+    match appearance {
+        Appearance::System => String::new(),
+        Appearance::Light => String::from(
+            r#"
+            window.br0x-window { background-color: #fafafa; color: #2e2e2e; }
+            headerbar, .top-bar { background-color: #ffffff; color: #2e2e2e; }
+            .br0x-sidebar { background-color: #f4f4f4; color: #2e2e2e; }
+            .omnibox-frame {
+                background-color: #ffffff;
+                border-color: color-mix(in srgb, currentColor 28%, transparent);
+            }
+            "#,
+        ),
+        Appearance::Dark => String::from(
+            r#"
+            window.br0x-window { background-color: #242424; color: #eeeeec; }
+            headerbar, .top-bar { background-color: #242424; color: #eeeeec; }
+            .br0x-sidebar { background-color: #1e1e1e; color: #eeeeec; }
+            .omnibox-frame {
+                background-color: #2d2d2d;
+                border-color: color-mix(in srgb, currentColor 28%, transparent);
+            }
+            "#,
+        ),
     }
 }
 
@@ -4581,6 +4627,7 @@ fn build_ui(app: &adw::Application) {
         .default_width(1200)
         .default_height(800)
         .build();
+    window.add_css_class("br0x-window");
 
     install_theme();
     apply_appearance(prefs.borrow().appearance);
@@ -4737,8 +4784,8 @@ fn build_ui(app: &adw::Application) {
     sidebar_collapse.add_css_class("flat");
     // CenterBox, not Box: a plain box ORs its children's expand flags, which
     // leaked expansion into the revealer and stretched the sidebar to half
-    // the window. CenterBox never computes expand, so the 220 px request
-    // below is a real width, not a floor.
+    // the window. CenterBox never computes expand, so the child's 220 px
+    // request above is a real width, not a floor.
     let sidebar_head = gtk4::CenterBox::new();
     sidebar_head.set_margin_top(6);
     sidebar_head.set_margin_bottom(6);
@@ -4763,13 +4810,16 @@ fn build_ui(app: &adw::Application) {
     sidebar_scroll.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
     sidebar_scroll.set_vexpand(true);
     let sidebar_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    sidebar_box.add_css_class("br0x-sidebar");
+    // Width lives on the revealer's child: a request on the revealer itself
+    // is a hard minimum even while hidden, permanently stealing 220 px.
+    sidebar_box.set_size_request(220, -1);
     sidebar_box.append(&sidebar_head);
     sidebar_box.append(&sidebar_pins);
     sidebar_box.append(&sidebar_scroll);
     let sidebar_reveal = gtk4::Revealer::new();
     sidebar_reveal.set_transition_type(gtk4::RevealerTransitionType::SlideRight);
     sidebar_reveal.set_transition_duration(200);
-    sidebar_reveal.set_size_request(220, -1);
     sidebar_reveal.set_child(Some(&sidebar_box));
     sidebar_reveal.set_reveal_child(false);
     tab_view.set_hexpand(true);
@@ -4818,6 +4868,17 @@ fn build_ui(app: &adw::Application) {
     let bookmarks_store = BookmarkStore::new(bookmarks_path());
     let bookmarks = Rc::new(RefCell::new(bookmarks_store.load()));
 
+    // Scheme-pinned chrome loads after the generic theme so it wins ties.
+    let scheme_css = gtk4::CssProvider::new();
+    if let Some(display) = gtk4::gdk::Display::default() {
+        gtk4::style_context_add_provider_for_display(
+            &display,
+            &scheme_css,
+            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+        );
+    }
+    scheme_css.load_from_string(&scheme_chrome_css(prefs.borrow().appearance));
+
     let shell = Rc::new(Shell {
         tab_view: tab_view.clone(),
         entry: entry.clone(),
@@ -4840,11 +4901,13 @@ fn build_ui(app: &adw::Application) {
         last_newtab,
         suggest_pop: suggest_popover.clone(),
         sidebar_reveal: sidebar_reveal.clone(),
+        sidebar_box: sidebar_box.clone(),
         sidebar_pins: sidebar_pins.clone(),
         sidebar_list: sidebar_list.clone(),
         sidebar_head_label: sidebar_label.clone(),
         sidebar_collapse_btn: sidebar_collapse.clone(),
         header_sidebar_btn: sidebar_btn.clone(),
+        scheme_css: scheme_css.clone(),
         sidebar_pages: RefCell::new(Vec::new()),
         sidebar_visible: RefCell::new(prefs.borrow().sidebar_visible),
         sidebar_rail: RefCell::new(prefs.borrow().sidebar_collapsed),
@@ -4868,7 +4931,7 @@ fn build_ui(app: &adw::Application) {
         tabs: Rc::new(RefCell::new(Tabs::new())),
     });
     // Restore the persisted sidebar shape before first paint.
-    shell.sidebar_reveal.set_size_request(if *shell.sidebar_rail.borrow() { 52 } else { 220 }, -1);
+    shell.sidebar_box.set_size_request(if *shell.sidebar_rail.borrow() { 52 } else { 220 }, -1);
     shell.sidebar_reveal.set_reveal_child(*shell.sidebar_visible.borrow());
     shell.sync_header_sidebar_btn();
 
@@ -5605,6 +5668,28 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scheme_chrome_pins_light_surfaces() {
+        let css = scheme_chrome_css(Appearance::Light);
+        assert!(css.contains("headerbar"), "header bar pinned");
+        assert!(css.contains(".br0x-sidebar"), "sidebar pinned");
+        assert!(css.contains("#ffffff"), "light header pin present");
+        assert!(!css.contains("#1e1e1e"), "no dark pins in light CSS");
+    }
+
+    #[test]
+    fn scheme_chrome_pins_dark_surfaces() {
+        let css = scheme_chrome_css(Appearance::Dark);
+        assert!(css.contains("headerbar"), "header bar pinned");
+        assert!(css.contains(".br0x-sidebar"), "sidebar pinned");
+        assert!(!css.contains("#ffffff"), "no light pins in dark CSS");
+    }
+
+    #[test]
+    fn scheme_chrome_system_pins_nothing() {
+        assert!(scheme_chrome_css(Appearance::System).is_empty());
+    }
 
     #[test]
     fn percent_decodes_escapes_and_plus() {
