@@ -30,12 +30,14 @@ br0x is a minimal browser for Linux. It uses Rust, GTK4, and WebKitGTK. It runs 
 - `window.open` and `target=_blank` open real tabs
 - Session save and restore. Only the selected tab loads at startup, the rest stay parked until you visit them
 - Adaptive park policy: idle background tabs release their web process under memory pressure. Tabs that are audible, loading, blank, pinned, or recently restored are exempt. Parked tabs are marked `• Parked`
-- Sleep tier: idle tabs slow their timers first and keep the page; only pressure parks them
+- Sleep tier: background tabs idle past the timeout (30 min default, adjustable) release their web process without waiting for pressure. Sleeping tabs are marked `• Sleeping`
+- Settings panel (Ctrl+,): appearance (system, light, dark — internal pages match), sleep timeout, search engine, privacy lists, saved passwords
+- Vertical sidebar tabs (F9): pinned tabs as icons, animated reveal, loading shimmer, keyboard reorder
 - Hide-anything: dismiss any element for the site, and it stays hidden
 - Reading mode: articles as one text column, no page chrome
-- Tab palette and sidebar tabs: jump from the keyboard, or list tabs vertically
-- Passwords in the system keychain, never in a browser file; per-site shield level
-- Video pop-out: the playing video floats above your tabs
+- Tab palette: Ctrl+K, then type — open tabs first, then history, then search
+- Passwords in a private on-disk vault (owner-only file, never logged); OS keyring backend next. Per-site shield level
+- Video pop-out: the playing video in its own window
 - Script-driven testing: `scripts/bench` drives isolated tabs over a socket when br0x runs with `BR0X_BENCH=1` (see `crates/br0x-shell-gtk/BENCH_WIRING.md`)
 - Reopen closed tab (Ctrl+Shift+T, last 10)
 - Base tracker block list compiled once and attached to every view
@@ -64,6 +66,8 @@ br0x is a minimal browser for Linux. It uses Rust, GTK4, and WebKitGTK. It runs 
 | Ctrl+Shift+H | Hide the element under the cursor |
 | Ctrl+Shift+O | Pop the playing video out |
 | Ctrl+Shift+S | Per-site shield toggle |
+| Ctrl+, | Settings |
+| Ctrl+Shift+PageUp, Ctrl+Shift+PageDown | Move tab in the sidebar |
 | Alt+Enter | Open address in new tab |
 | Ctrl+Q | Quit |
 

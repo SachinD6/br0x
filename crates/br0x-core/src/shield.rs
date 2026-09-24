@@ -62,6 +62,12 @@ impl ShieldStore {
         self.overrides.get(&domain).copied().unwrap_or(true)
     }
 
+    /// The explicit override for `domain`, if one is stored.
+    pub fn get(&self, domain: &str) -> Option<bool> {
+        let domain = normalize_domain(domain);
+        self.overrides.get(&domain).copied()
+    }
+
     /// Drop the override for `domain`. True when one existed.
     pub fn reset(&mut self, domain: &str) -> std::io::Result<bool> {
         let domain = normalize_domain(domain);
@@ -71,6 +77,14 @@ impl ShieldStore {
         } else {
             Ok(false)
         }
+    }
+
+    /// Every stored override, sorted by domain. Backs settings lists.
+    pub fn overrides(&self) -> Vec<(String, bool)> {
+        let mut out: Vec<(String, bool)> =
+            self.overrides.iter().map(|(d, e)| (d.clone(), *e)).collect();
+        out.sort();
+        out
     }
 
     pub fn path(&self) -> &Path {
@@ -186,5 +200,22 @@ mod tests {
     fn missing_file_yields_default_enabled() {
         let store = store("missing");
         assert!(store.is_enabled("example.com"));
+    }
+
+    #[test]
+    fn overrides_lists_stored_pairs_sorted() {
+        let mut store = store("list");
+        assert!(store.overrides().is_empty());
+        assert_eq!(store.get("a.example"), None);
+        store.set("b.example", false).unwrap();
+        store.set("a.example", true).unwrap();
+        assert_eq!(store.get("B.EXAMPLE:8080"), Some(false));
+        assert_eq!(store.get("a.example"), Some(true));
+        assert_eq!(store.get("unset.example"), None);
+        assert_eq!(
+            store.overrides(),
+            vec![("a.example".to_string(), true), ("b.example".to_string(), false),]
+        );
+        let _ = std::fs::remove_dir_all(store.path().parent().unwrap());
     }
 }
