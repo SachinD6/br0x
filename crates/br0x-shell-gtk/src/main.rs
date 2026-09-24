@@ -436,8 +436,8 @@ fn history_html(
     }}
     .filter-box input:focus {{
       outline: none;
-      border-color: light-dark(#2f6fed, #7aa6ff);
-      box-shadow: 0 0 0 3px light-dark(rgba(47, 111, 237, 0.14), rgba(122, 166, 255, 0.2));
+      border-color: AccentColor;
+      box-shadow: 0 0 0 3px color-mix(in srgb, AccentColor 16%, transparent);
     }}
     h2.day {{
       font-size: 12px;
@@ -967,7 +967,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
       to {{ opacity: 1; transform: none; }}
     }}
     .wordmark .zero {{
-      color: light-dark(#2f6fed, #7aa6ff);
+      color: AccentColor;
     }}
     .subtitle {{
       color: light-dark(#616161, #9e9e9e);
@@ -1025,8 +1025,8 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
     }}
     .search-field:focus {{
       outline: none;
-      border-color: light-dark(#2f6fed, #7aa6ff);
-      box-shadow: 0 0 0 3px light-dark(rgba(47, 111, 237, 0.16), rgba(122, 166, 255, 0.22));
+      border-color: AccentColor;
+      box-shadow: 0 0 0 3px color-mix(in srgb, AccentColor 16%, transparent);
     }}
     .search-field::placeholder {{
       color: light-dark(#9e9e9e, #757575);
@@ -1196,8 +1196,8 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
       cursor: pointer;
     }}
     button.add-card:hover {{
-      border-color: light-dark(#2f6fed, #7aa6ff);
-      color: light-dark(#2f6fed, #7aa6ff);
+      border-color: AccentColor;
+      color: AccentColor;
     }}
     footer {{
       margin-top: 40px;
@@ -1279,8 +1279,8 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
     }}
     .modal input:focus {{
       outline: none;
-      border-color: light-dark(#2f6fed, #7aa6ff);
-      box-shadow: 0 0 0 3px light-dark(rgba(47, 111, 237, 0.16), rgba(122, 166, 255, 0.22));
+      border-color: AccentColor;
+      box-shadow: 0 0 0 3px color-mix(in srgb, AccentColor 16%, transparent);
     }}
     .modal-error {{
       display: none;
@@ -1304,8 +1304,8 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
     }}
     .btn-primary {{
       border: 0;
-      background: light-dark(#2f6fed, #7aa6ff);
-      color: light-dark(#ffffff, #0b1b33);
+      background: AccentColor;
+      color: AccentColorText;
     }}
     .btn-ghost {{
       border: 1px solid light-dark(#e2e5ec, #3d3d3d);
@@ -1679,9 +1679,11 @@ fn release_entry(entry: &mut TabEntry, sleeping: bool) -> Option<webkit6::WebVie
     entry.meta.parked = !sleeping;
     entry.meta.sleeping = sleeping;
     let badge = if sleeping { "• Sleeping" } else { "• Parked" };
-    let title = entry.page.title().to_string();
-    if !title.is_empty() && !title.ends_with(badge) {
-        entry.page.set_title(&format!("{title} {badge}"));
+    // Strip first: the title may still carry the other badge, and stacking
+    // them leaks into the window title, palette, and saved session.
+    let base = strip_state_badges(entry.page.title().as_ref());
+    if !base.is_empty() {
+        entry.page.set_title(&format!("{base} {badge}"));
     }
     Some(entry.view.clone())
 }
@@ -1861,11 +1863,18 @@ fn js_string(text: &str) -> String {
 
 /// Tab title without the sleep/park badge the shell appends.
 fn strip_state_badges(title: &str) -> String {
-    title
-        .strip_suffix(" • Parked")
-        .or_else(|| title.strip_suffix(" • Sleeping"))
-        .unwrap_or(title)
-        .to_owned()
+    // Loop: a re-parked tab can stack "... • Parked • Sleeping".
+    let mut out = title;
+    loop {
+        let next = out
+            .strip_suffix(" • Parked")
+            .or_else(|| out.strip_suffix(" • Sleeping"))
+            .unwrap_or(out);
+        if next.len() == out.len() {
+            return out.to_owned();
+        }
+        out = next;
+    }
 }
 
 /// One suggestion row: an open tab to switch to, or a URL to load.
@@ -1881,23 +1890,20 @@ fn curtain_css(selectors: &[String]) -> String {
     selectors.iter().map(|s| format!("{s}{{display:none!important}}")).collect()
 }
 
-/// Arms the curtain picker: the next click captures a stable selector (id
-/// preferred, then a short class path), hides the element immediately, and
-/// stashes the selector on `window.__br0xPick` for the shell to collect.
+/// Arms the curtain picker: the next click captures a stable selector,
+/// hides the element immediately, and stashes the selector on
+/// `window.__br0xPick` for the shell to collect. Anchors on stable ids and
+/// test attributes, verifies single-element resolve, and refuses the page
+/// itself (`!refuse:page`) instead of blanking the site.
 const CURTAIN_ARM_JS: &str = r##"window.__br0xPick=null;
 if(!window.__br0xPickHandler){window.__br0xPickHandler=function(e){e.preventDefault();e.stopPropagation();
-var el=e.target;var cur=el;var parts=[];
-if(cur&&cur.id){window.__br0xPick='#'+CSS.escape(cur.id);}
-else{var depth=0;while(cur&&cur.nodeType===1&&cur!==document.documentElement&&depth<5){
-var s=cur.tagName.toLowerCase();
-var cls=(cur.className&&typeof cur.className==='string')?cur.className.trim().split(/\s+/).filter(function(c){return /^[A-Za-z_-][\w-]*$/.test(c);}).slice(0,2):[];
-if(cls.length){s+='.'+cls.map(function(c){return CSS.escape(c);}).join('.');}
-var par=cur.parentElement;
-if(par){var sibs=Array.prototype.filter.call(par.children,function(c){return c.tagName===cur.tagName;});if(sibs.length>1){s+=':nth-of-type('+(sibs.indexOf(cur)+1)+')';}}
-parts.unshift(s);cur=par;depth++;}
-window.__br0xPick=parts.join(' > ');}
-try{el.style.setProperty('display','none','important');}catch(_){}
-};document.addEventListener('click',window.__br0xPickHandler,true);}"##;
+var el=e.target;
+if(!el||el===document.documentElement||el===document.body){window.__br0xPick='!refuse:page';return;}
+function seg(n){var s=n.tagName.toLowerCase();var dn=null;var attrs=['data-testid','data-test','data-qa'];for(var k=0;k<attrs.length;k++){if(n.getAttribute&&n.getAttribute(attrs[k])){dn=attrs[k];break;}}if(dn){return {one:s+'['+dn+'="'+String(n.getAttribute(dn)).replace(/"/g,'')+'"]',stop:1};}var id=n.id||'';if(id&&/^[A-Za-z_][\w:.-]*$/.test(id)&&!/\d{4,}/.test(id)&&!/^(ad|ads|banner|popup|modal|cookie)/i.test(id)){return {one:'#'+CSS.escape(id),stop:1};}var cls=(n.className&&typeof n.className==='string')?n.className.trim().split(/\s+/).filter(function(c){return /^[A-Za-z_-][\w-]*$/.test(c)&&!/^(ad|ads)/i.test(c);}).slice(0,2):[];if(cls.length){s+='.'+cls.map(function(c){return CSS.escape(c);}).join('.');}var par=n.parentElement;if(par){var sibs=Array.prototype.filter.call(par.children,function(c){return c.tagName===n.tagName;});if(sibs.length>1){s+=':nth-of-type('+(sibs.indexOf(n)+1)+')';}}return {one:s,stop:0};}
+var cur=el;var parts=[];var depth=0;var done=false;
+while(cur&&cur.nodeType===1&&cur!==document.documentElement&&cur!==document.body&&depth<6){var r=seg(cur);parts.unshift(r.one);if(r.stop){var cand=parts.join(' > ');try{if(document.querySelectorAll(cand).length===1){window.__br0xPick=cand;done=true;}}catch(_){}if(done){break;}}cur=cur.parentElement;depth++;}
+if(!done){if(!parts.length){window.__br0xPick='!refuse:page';return;}window.__br0xPick=parts.join(' > ');}
+try{el.style.setProperty('display','none','important');}catch(_){}};document.addEventListener('click',window.__br0xPickHandler,true);}"##;
 
 /// Poll target while the picker is armed: empty until an element is picked.
 const CURTAIN_POLL_JS: &str = "window.__br0xPick||''";
@@ -2010,7 +2016,7 @@ h1 {{ font-size: 20px; margin: 0 0 8px; }}
 p {{ color: light-dark(#616161, #9e9e9e); font-size: 14px; margin: 0 0 6px; }}
 .url {{ font-size: 12px; word-break: break-all; }}
 button {{ margin-top: 18px; padding: 10px 22px; border-radius: 9999px; border: 0;
-  background: light-dark(#2f6fed, #7aa6ff); color: light-dark(#ffffff, #0b1b33); font: inherit; cursor: pointer; }}
+  background: AccentColor; color: AccentColorText; font: inherit; cursor: pointer; }}
 </style></head>
 <body><div class="card"><div class="icon">○</div><h1>{heading}</h1><p>{message}</p>
 <p class="url">{uri}</p><button onclick="location.reload()">Reload</button></div></body></html>"#,
@@ -2045,7 +2051,10 @@ fn set_security_icon(entry: &gtk4::Entry, uri: &str) {
 }
 
 fn window_title_for(tab_view: &adw::TabView) -> String {
-    let title = tab_view.selected_page().map(|p| p.title().to_string()).unwrap_or_default();
+    let title = tab_view
+        .selected_page()
+        .map(|p| strip_state_badges(p.title().as_ref()))
+        .unwrap_or_default();
     if title.is_empty() { "br0x".to_owned() } else { format!("{title} — br0x") }
 }
 
@@ -2102,6 +2111,7 @@ struct Shell {
     progress: gtk4::ProgressBar,
     read_progress: gtk4::ProgressBar,
     key_btn: gtk4::Button,
+    engine_btn: gtk4::MenuButton,
     find_bar: gtk4::SearchBar,
     find_entry: gtk4::SearchEntry,
     find_status: gtk4::Label,
@@ -2113,19 +2123,28 @@ struct Shell {
     /// Engine, frequent list and scheme the start page file was last built from.
     last_newtab: RefCell<Option<(SearchEngine, Vec<Visit>, Appearance)>>,
     suggest_pop: gtk4::Popover,
-    sidebar_box: gtk4::Box,
     sidebar_reveal: gtk4::Revealer,
-    sidebar_pins: gtk4::Box,
+    sidebar_pins: gtk4::FlowBox,
     sidebar_list: gtk4::ListBox,
+    sidebar_head_label: gtk4::Label,
+    sidebar_collapse_btn: gtk4::Button,
+    header_sidebar_btn: gtk4::Button,
     sidebar_pages: RefCell<Vec<adw::TabPage>>,
     sidebar_visible: RefCell<bool>,
     sidebar_rail: RefCell<bool>,
+    /// Tab selected before the current one, so deselection stamps idle time.
+    prev_selected: RefCell<Option<adw::TabPage>>,
     key_pop: gtk4::Popover,
     key_list: gtk4::ListBox,
     shield: Rc<RefCell<ShieldStore>>,
     curtain: Rc<RefCell<CurtainStore>>,
     vault: Rc<RefCell<FileVaultStore>>,
     picker_armed: RefCell<bool>,
+    /// The exact view the picker was armed on. Disarm, timeout, and cancel
+    /// must evaluate on this view: with tab switches in between, the
+    /// selected view is a different page and disarming it leaves a live
+    /// click handler behind that hides elements nobody persists.
+    picker_view: RefCell<Option<webkit6::WebView>>,
     settings_win: RefCell<Option<SettingsWindow>>,
     popouts: RefCell<Vec<gtk4::Window>>,
     history: Rc<RefCell<Option<History>>>,
@@ -2307,19 +2326,30 @@ impl Shell {
         }
     }
 
+    /// Reload open History pages (their color scheme bakes in at serve
+    /// time, so an appearance switch must repaint them too).
+    fn reload_history_pages(&self) {
+        for entry in self.tabs.borrow().entries.iter() {
+            if entry.view.uri().is_some_and(|u| u.as_str().starts_with("br0x://history")) {
+                entry.view.reload();
+            }
+        }
+    }
+
     /// Open tabs matching `needle` for the palette: (title, url, page).
     fn open_tab_hits(&self, needle: &str) -> Vec<(String, String, adw::TabPage)> {
         let query = needle.to_lowercase();
         let tabs = self.tabs.borrow();
         let mut out = Vec::new();
         for entry in tabs.entries.iter() {
-            let title = entry.page.title().to_string();
-            let url = entry
-                .view
-                .uri()
-                .map(|uri| uri.to_string())
-                .or_else(|| entry.meta.pending_url.clone())
-                .unwrap_or_default();
+            let title = strip_state_badges(entry.page.title().as_ref());
+            // A released tab sits on about:blank: match its real URL.
+            let live = entry.view.uri().map(|uri| uri.to_string()).unwrap_or_default();
+            let url = if live.is_empty() || is_blank_uri(&live) {
+                entry.meta.pending_url.clone().unwrap_or_default()
+            } else {
+                live
+            };
             if title.to_lowercase().contains(&query) || url.to_lowercase().contains(&query) {
                 out.push((title, url, entry.page.clone()));
                 if out.len() >= 4 {
@@ -2397,7 +2427,12 @@ impl Shell {
             self.toasts.add_toast(adw::Toast::new("Open a website first, then pick an element"));
             return;
         };
+        if domain_of(&view.uri().map(|u| u.to_string()).unwrap_or_default()).is_empty() {
+            self.toasts.add_toast(adw::Toast::new("Hiding works on websites, not internal pages"));
+            return;
+        }
         *self.picker_armed.borrow_mut() = true;
+        *self.picker_view.borrow_mut() = Some(view.clone());
         eval_text(&view, CURTAIN_ARM_JS, |_| {});
         self.toasts.add_toast(adw::Toast::new("Picker on — click the element to hide"));
         self.poll_picker(view);
@@ -2405,9 +2440,10 @@ impl Shell {
 
     fn disarm_picker(&self) {
         *self.picker_armed.borrow_mut() = false;
-        if let Some(view) = selected_view(&self.tab_view) {
-            eval_text(&view, CURTAIN_DISARM_JS, |_| {});
+        if let Some(view) = self.picker_view.borrow().as_ref() {
+            eval_text(view, CURTAIN_DISARM_JS, |_| {});
         }
+        *self.picker_view.borrow_mut() = None;
     }
 
     /// Collect the picked selector: the page hides the element at click
@@ -2424,7 +2460,6 @@ impl Shell {
                 shell.toasts.add_toast(adw::Toast::new("Picker timed out"));
                 return glib::ControlFlow::Break;
             }
-            let domain = domain_of(&view.uri().map(|u| u.to_string()).unwrap_or_default());
             let shell_next = shell.clone();
             let view_next = view.clone();
             eval_text(&view, CURTAIN_POLL_JS, move |picked| {
@@ -2432,7 +2467,25 @@ impl Shell {
                 if picked.is_empty() || !*shell_next.picker_armed.borrow() {
                     return;
                 }
+                if picked == "!refuse:page" {
+                    eval_text(&view_next, "window.__br0xPick=null", |_| {});
+                    shell_next.toasts.add_toast(adw::Toast::new(
+                        "Can't hide the whole page — pick something smaller",
+                    ));
+                    return;
+                }
+                // Read the URI at collect time: a navigation mid-pick must
+                // not file the selector under the old domain.
+                let domain = domain_of(&view_next.uri().map(|u| u.to_string()).unwrap_or_default());
+                if domain.is_empty() {
+                    shell_next.disarm_picker();
+                    shell_next
+                        .toasts
+                        .add_toast(adw::Toast::new("Hiding works on websites, not internal pages"));
+                    return;
+                }
                 *shell_next.picker_armed.borrow_mut() = false;
+                *shell_next.picker_view.borrow_mut() = None;
                 let added = shell_next.curtain.borrow_mut().hide(&domain, &picked);
                 shell_next.apply_curtain_to_view(&view_next);
                 shell_next.toasts.add_toast(adw::Toast::new(match added {
@@ -2448,6 +2501,19 @@ impl Shell {
         });
     }
 
+    /// Re-apply the curtain stylesheet and reload every open tab on
+    /// `domain`. Hiding is injected at document start, so store changes
+    /// only take effect on loaded pages through an explicit reload.
+    fn reload_domain_tabs(&self, domain: &str) {
+        for entry in self.tabs.borrow().entries.iter() {
+            let uri = entry.view.uri().map(|u| u.to_string()).unwrap_or_default();
+            if domain_of(&uri) == domain {
+                self.apply_curtain_to_view(&entry.view);
+                entry.view.reload();
+            }
+        }
+    }
+
     /// Forget every hidden selector on the current site and reload it.
     fn curtain_clear_site(self: &Rc<Self>) {
         let Some(view) = selected_view(&self.tab_view) else {
@@ -2456,8 +2522,7 @@ impl Shell {
         let domain = domain_of(&view.uri().map(|u| u.to_string()).unwrap_or_default());
         match self.curtain.borrow_mut().clear_domain(&domain) {
             Ok(true) => {
-                self.apply_curtain_to_view(&view);
-                view.reload();
+                self.reload_domain_tabs(&domain);
                 self.toasts.add_toast(adw::Toast::new("Unhidden — reloading this site"));
             }
             Ok(false) => {
@@ -2707,6 +2772,7 @@ impl Shell {
                     .icon()
                     .map(|gicon| gtk4::Image::from_gicon(&gicon))
                     .unwrap_or_else(|| gtk4::Image::from_icon_name("web-browser-symbolic"));
+                icon.set_pixel_size(16);
                 let btn = gtk4::Button::new();
                 btn.set_child(Some(&icon));
                 btn.add_css_class("flat");
@@ -2733,69 +2799,94 @@ impl Shell {
                     tv.close_page(&page);
                 });
                 btn.add_controller(middle);
-                self.sidebar_pins.append(&btn);
+                self.sidebar_pins.insert(&btn, -1);
             } else {
                 pages.push(item.page.clone());
                 self.sidebar_list.append(&self.sidebar_row(item, &tab_view));
-                if item.selected
-                    && let Some(row) = self.sidebar_list.row_at_index(pages.len() as i32 - 1)
-                {
-                    self.sidebar_list.select_row(Some(&row));
-                }
             }
         }
         self.sidebar_pins.set_visible(items.iter().any(|i| i.pinned && !rail));
         *self.sidebar_pages.borrow_mut() = pages;
+        self.sync_sidebar_head();
     }
 
-    /// One unpinned sidebar row: favicon, title, state badge, close button.
+    /// Rail mode hides the label and offers expansion; expanded mode offers
+    /// collapse. Called on every refresh so the header can never lie.
+    fn sync_sidebar_head(&self) {
+        let rail = *self.sidebar_rail.borrow();
+        self.sidebar_head_label.set_visible(!rail);
+        self.sidebar_collapse_btn.set_icon_name(if rail {
+            "sidebar-show-symbolic"
+        } else {
+            "sidebar-hide-symbolic"
+        });
+        self.sidebar_collapse_btn.set_tooltip_text(Some(if rail {
+            "Expand sidebar"
+        } else {
+            "Collapse sidebar to icons"
+        }));
+    }
+
+    /// One unpinned sidebar row: a single fixed-height line of unread dot,
+    /// favicon, title, state badge, and close button. Nothing here may wrap
+    /// or change the row metrics, so badges and dots never shift the layout.
     fn sidebar_row(&self, item: &SidebarItem, tab_view: &adw::TabView) -> gtk4::ListBoxRow {
         let rail = *self.sidebar_rail.borrow();
-        let slot = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+        let slot = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
         slot.set_margin_top(4);
         slot.set_margin_bottom(4);
         slot.set_margin_start(8);
         slot.set_margin_end(8);
+        // Fixed-width unread marker instead of a text prefix: the title
+        // never shifts and long titles cannot ellipsize the dot away.
+        let dot = gtk4::Label::new(Some("•"));
+        dot.set_size_request(10, -1);
+        dot.set_valign(gtk4::Align::Center);
+        dot.add_css_class("sidebar-dot");
+        dot.set_visible(item.attention && !rail);
+        slot.append(&dot);
         let icon = item
             .page
             .icon()
             .map(|gicon| gtk4::Image::from_gicon(&gicon))
             .unwrap_or_else(|| gtk4::Image::from_icon_name("web-browser-symbolic"));
+        // Capped: favicon textures range from 16 to 180 px by site.
+        icon.set_pixel_size(16);
+        icon.set_valign(gtk4::Align::Center);
+        icon.add_css_class("favicon");
         slot.append(&icon);
         if !rail {
-            let text = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-            text.set_hexpand(true);
             let title = gtk4::Label::new(None);
-            let mut name =
+            let name =
                 if item.title.is_empty() { "New Tab".to_owned() } else { item.title.clone() };
-            if item.attention {
-                name = format!("• {name}");
-            }
             title.set_text(&name);
             title.set_xalign(0.0);
             title.set_hexpand(true);
             title.set_max_width_chars(28);
             title.set_ellipsize(gtk4::pango::EllipsizeMode::End);
-            text.append(&title);
+            title.set_valign(gtk4::Align::Center);
+            slot.append(&title);
             let badge = if item.sleeping {
-                "Sleeping — click to restore"
+                "Sleeping"
             } else if item.parked {
-                "Parked — click to restore"
+                "Parked"
             } else if item.loading {
-                "Loading…"
+                "Loading"
             } else {
                 ""
             };
             if !badge.is_empty() {
                 let badge_label = gtk4::Label::new(Some(badge));
-                badge_label.set_xalign(0.0);
+                badge_label.set_valign(gtk4::Align::Center);
+                badge_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+                badge_label.set_max_width_chars(10);
                 badge_label.add_css_class("sidebar-badge");
-                text.append(&badge_label);
+                slot.append(&badge_label);
             }
-            slot.append(&text);
             let close = gtk4::Button::from_icon_name("window-close-symbolic");
             close.set_tooltip_text(Some("Close tab (Ctrl+W)"));
             close.add_css_class("flat");
+            close.add_css_class("close-btn");
             close.set_valign(gtk4::Align::Center);
             let page = item.page.clone();
             let tv = tab_view.clone();
@@ -2813,10 +2904,11 @@ impl Shell {
         if item.loading {
             row.add_css_class("sidebar-loading");
         }
-        if item.attention {
-            row.add_css_class("sidebar-unread");
+        let mut tip = if item.title.is_empty() { "New Tab".to_owned() } else { item.title.clone() };
+        if item.sleeping || item.parked {
+            tip.push_str(" — click to restore");
         }
-        row.set_tooltip_text(Some(if item.title.is_empty() { "New Tab" } else { &item.title }));
+        row.set_tooltip_text(Some(&tip));
         // Middle-click closes without selecting first.
         let page = item.page.clone();
         let tv = tab_view.clone();
@@ -2840,10 +2932,27 @@ impl Shell {
         *self.sidebar_visible.borrow_mut() = visible;
         self.prefs.borrow_mut().sidebar_visible = visible;
         self.save_prefs();
+        self.sync_header_sidebar_btn();
         if visible {
             self.refresh_sidebar();
         }
         self.sidebar_reveal.set_reveal_child(visible);
+    }
+
+    /// Header sidebar button mirrors visibility, so its icon can never lie
+    /// about the persisted state (including across restarts).
+    fn sync_header_sidebar_btn(&self) {
+        let visible = *self.sidebar_visible.borrow();
+        self.header_sidebar_btn.set_icon_name(if visible {
+            "sidebar-hide-symbolic"
+        } else {
+            "sidebar-show-symbolic"
+        });
+        self.header_sidebar_btn.set_tooltip_text(Some(if visible {
+            "Hide tab sidebar (F9)"
+        } else {
+            "Show tab sidebar (F9)"
+        }));
     }
 
     /// Collapse the sidebar to a thin icon rail, or expand it back, and
@@ -2857,7 +2966,7 @@ impl Shell {
         *self.sidebar_rail.borrow_mut() = rail;
         self.prefs.borrow_mut().sidebar_collapsed = rail;
         self.save_prefs();
-        self.sidebar_box.set_size_request(if rail { 52 } else { 220 }, -1);
+        self.sidebar_reveal.set_size_request(if rail { 52 } else { 220 }, -1);
         self.refresh_sidebar();
     }
 
@@ -2890,6 +2999,7 @@ impl Shell {
         let engine = self.prefs.borrow().engine;
         self.refresh_start_page(engine);
         self.reload_start_pages();
+        self.reload_history_pages();
         self.toasts.add_toast(adw::Toast::new(&format!("Appearance: {}", appearance.name())));
     }
 
@@ -2955,7 +3065,7 @@ impl Shell {
         // The start page names the engine and posts to its form.
         self.refresh_start_page(engine);
         self.reload_start_pages();
-        self.entry.set_placeholder_text(Some("Search or type a URL"));
+        self.engine_btn.set_label(engine.name());
         self.toasts.add_toast(adw::Toast::new(&format!("Search engine: {}", engine.name())));
     }
 
@@ -3203,6 +3313,18 @@ impl Shell {
 
     /// Selected tab changed: sync entry, title, nav, resume released tabs.
     fn on_selection_changed(&self) {
+        // Idle time runs while a tab is backgrounded, so stamp the tab we
+        // are leaving: otherwise a tab left on screen for 20 minutes parks
+        // on the very next tick after you switch away from it.
+        let current = self.tab_view.selected_page();
+        if self.prev_selected.borrow().as_ref() != current.as_ref() {
+            if let Some(prev) = self.prev_selected.borrow().clone()
+                && let Some(entry) = self.tabs.borrow_mut().entry_mut(&prev)
+            {
+                entry.meta.last_active = Instant::now();
+            }
+            *self.prev_selected.borrow_mut() = current.clone();
+        }
         // Decide under the borrow, act after it: loading a URI re-enters this
         // handler through signals, and a held borrow would panic.
         let resume = {
@@ -3298,22 +3420,7 @@ impl Shell {
                         );
                     }
                     Action::Park => {
-                        // Timed release without pressure sleeps; a release
-                        // under pressure parks. Ask core with the sleep
-                        // threshold pinned to the park timeout so the sleep
-                        // decision, not the clock alone, picks the badge.
-                        // A disabled sleep (Never) always parks.
-                        let sleeping = sleep_secs.is_some_and(|configured| {
-                            snaps.iter().find(|snap| snap.id == id).is_some_and(|snap| {
-                                let params = policy::params_for(sys.tab_count);
-                                let sleepy = br0x_core::tab::PolicyParams {
-                                    sleep_secs: configured.min(params.park_secs),
-                                    ..params
-                                };
-                                policy::decide_with_params(snap, &sys, &sleepy) == Action::Sleep
-                            })
-                        });
-                        if let Some(view) = release_entry(entry, sleeping) {
+                        if let Some(view) = release_entry(entry, false) {
                             to_park.push(view);
                         }
                     }
@@ -3513,13 +3620,12 @@ impl Shell {
         dialog.present();
     }
 
-    /// Settings window (Ctrl+, and the header menu). One window at a time:
-    /// reopening presents the existing one. Lists rebuild on every open.
+    /// Settings window (Ctrl+, and the header menu). One window at a time,
+    /// rebuilt fresh on every open so rows never show stale prefs.
     #[allow(deprecated)]
     fn open_settings(self: &Rc<Self>) {
         if let Some(win) = self.settings_win.borrow().as_ref() {
-            win.present();
-            return;
+            win.close();
         }
         let win = SettingsWindow::new();
         win.set_transient_for(Some(&self.window));
@@ -3702,29 +3808,85 @@ impl Shell {
             curtain.add(&row);
         }
         for domain in domains {
-            let count = self.curtain.borrow().selectors_for(&domain).len();
+            let selectors = self.curtain.borrow().selectors_for(&domain);
             let row = adw::ActionRow::new();
             row.set_title(&domain);
             row.set_subtitle(&format!(
                 "{} hidden element{}",
-                count,
-                if count == 1 { "" } else { "s" }
+                selectors.len(),
+                if selectors.len() == 1 { "" } else { "s" }
             ));
             let clear = gtk4::Button::with_label("Clear");
             clear.set_tooltip_text(Some("Unhide every element on this site"));
             clear.add_css_class("flat");
+            // Rows created below remove themselves; the Clear button takes
+            // the header plus every selector row with it.
+            let owned: Rc<RefCell<Vec<adw::ActionRow>>> = Rc::new(RefCell::new(Vec::new()));
             let shell = self.clone();
+            let owned_clear = owned.clone();
             let row_weak = row.downgrade();
             let curtain_weak = curtain.downgrade();
+            let domain_clear = domain.clone();
             clear.connect_clicked(move |_| {
-                let _ = shell.curtain.borrow_mut().clear_domain(&domain);
-                if let (Some(row), Some(group)) = (row_weak.upgrade(), curtain_weak.upgrade()) {
-                    group.remove(&row);
+                let _ = shell.curtain.borrow_mut().clear_domain(&domain_clear);
+                if let Some(group) = curtain_weak.upgrade() {
+                    if let Some(header) = row_weak.upgrade() {
+                        group.remove(&header);
+                    }
+                    for owned_row in owned_clear.borrow().iter() {
+                        group.remove(owned_row);
+                    }
                 }
-                shell.toasts.add_toast(adw::Toast::new(&format!("Unhidden on {domain}")));
+                shell.reload_domain_tabs(&domain_clear);
+                shell.toasts.add_toast(adw::Toast::new(&format!("Unhidden on {domain_clear}")));
             });
             row.add_suffix(&clear);
             curtain.add(&row);
+            // Remaining count shared with the per-selector remove buttons:
+            // each removal updates the header subtitle, and the last one
+            // takes the header with it so no stale "1 hidden element" lingers.
+            let remaining: Rc<std::cell::Cell<usize>> =
+                Rc::new(std::cell::Cell::new(selectors.len()));
+            let header_weak = row.downgrade();
+            for selector in selectors {
+                let item = adw::ActionRow::new();
+                item.set_title(&selector);
+                item.set_subtitle("Hidden element — remove to show it again");
+                let remove = gtk4::Button::from_icon_name("window-close-symbolic");
+                remove.set_tooltip_text(Some("Unhide this element"));
+                remove.add_css_class("flat");
+                let shell = self.clone();
+                let item_weak = item.downgrade();
+                let curtain_weak = curtain.downgrade();
+                let header_item = header_weak.clone();
+                let remaining_item = remaining.clone();
+                let domain_item = domain.clone();
+                let selector_item = selector.clone();
+                remove.connect_clicked(move |_| {
+                    let _ = shell.curtain.borrow_mut().unhide(&domain_item, &selector_item);
+                    if let (Some(item), Some(group)) = (item_weak.upgrade(), curtain_weak.upgrade())
+                    {
+                        group.remove(&item);
+                        let left = remaining_item.get().saturating_sub(1);
+                        remaining_item.set(left);
+                        if let Some(header) = header_item.upgrade() {
+                            if left == 0 {
+                                group.remove(&header);
+                            } else {
+                                header.set_subtitle(&format!(
+                                    "{left} hidden element{}",
+                                    if left == 1 { "" } else { "s" }
+                                ));
+                            }
+                        }
+                    }
+                    shell.reload_domain_tabs(&domain_item);
+                    shell.toasts.add_toast(adw::Toast::new("Element unhidden — reloading"));
+                });
+                item.add_suffix(&remove);
+                curtain.add(&item);
+                owned.borrow_mut().push(item);
+            }
         }
         page.add(&curtain);
         let history_group = adw::PreferencesGroup::new();
@@ -3938,13 +4100,23 @@ impl Shell {
             });
         }
         self.window.add_action(&restore_action);
-        let engine_action = gio::SimpleAction::new("set-engine", Some(glib::VariantTy::UINT32));
+        // Stateful so both engine menus render the active engine checked.
+        let initial =
+            SearchEngine::ALL.iter().position(|e| *e == self.prefs.borrow().engine).unwrap_or(0)
+                as u32;
+        let engine_action = gio::SimpleAction::new_stateful(
+            "set-engine",
+            Some(glib::VariantTy::UINT32),
+            &initial.to_variant(),
+        );
         {
             let s = self.clone();
+            let action = engine_action.clone();
             engine_action.connect_activate(move |_, param| {
                 if let Some(idx) = param.and_then(|p| p.get::<u32>())
                     && let Some(engine) = SearchEngine::ALL.get(idx as usize)
                 {
+                    action.set_state(&idx.to_variant());
                     s.set_engine(*engine);
                 }
             });
@@ -4227,12 +4399,24 @@ impl Shell {
 
 /// Apply the appearance pref to the whole shell chrome at once. The style
 /// manager switch is synchronous, so there is no flicker between themes.
+/// Verified by reading the switch back: libadwaita silently ignores the
+/// call when GTK_THEME is set (fixed by clearing it process-locally in
+/// main), so a mismatch is logged instead of failing quietly.
 fn apply_appearance(appearance: Appearance) {
-    adw::StyleManager::default().set_color_scheme(match appearance {
+    let manager = adw::StyleManager::default();
+    manager.set_color_scheme(match appearance {
         Appearance::System => adw::ColorScheme::Default,
         Appearance::Light => adw::ColorScheme::ForceLight,
         Appearance::Dark => adw::ColorScheme::ForceDark,
     });
+    let want_dark = match appearance {
+        Appearance::System => manager.system_supports_color_schemes() && manager.is_dark(),
+        Appearance::Light => false,
+        Appearance::Dark => true,
+    };
+    if manager.is_dark() != want_dark {
+        eprintln!("br0x: appearance switch unverified (want dark={want_dark})");
+    }
 }
 
 /// CSS `color-scheme` token for internal pages (start, history, error,
@@ -4261,14 +4445,14 @@ fn install_theme() {
             padding: 2px 8px 2px 6px;
             min-height: 40px;
             min-width: 220px;
-            background-color: var(--view-bg-color);
+            background-color: var(--view-bg-color, @view_bg_color);
             border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
             box-shadow: 0 1px 2px color-mix(in srgb, currentColor 6%, transparent);
         }
 
         .omnibox-frame:focus-within {
-            border-color: color-mix(in srgb, var(--accent-color) 60%, transparent);
-            box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 20%, transparent);
+            border-color: color-mix(in srgb, var(--accent-color, @accent_bg_color) 60%, transparent);
+            box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color, @accent_bg_color) 20%, transparent);
         }
 
         .omnibox-frame entry {
@@ -4324,19 +4508,18 @@ fn install_theme() {
 
         .hairline-progress progress {
             min-height: 2px;
-            background-color: var(--accent-color);
+            background-color: var(--accent-color, @accent_bg_color);
             border: none;
             border-radius: 0;
         }
 
         .sidebar-row {
             border-radius: 10px;
-            margin: 2px 6px;
+            margin: 2px 0;
         }
 
         .sidebar-row-active {
-            background: color-mix(in srgb, var(--accent-color) 16%, transparent);
-            font-weight: 600;
+            background: color-mix(in srgb, var(--accent-color, @accent_bg_color) 16%, transparent);
         }
 
         .sidebar-badge {
@@ -4344,9 +4527,20 @@ fn install_theme() {
             opacity: 0.65;
         }
 
-        .sidebar-unread {
-            color: var(--accent-color);
-            font-weight: 700;
+        .sidebar-dot {
+            color: var(--accent-color, @accent_bg_color);
+            font-size: 11px;
+        }
+
+        /* Close buttons appear on hover or keyboard focus only, so titles
+        keep their full width at rest. */
+        .sidebar-row .close-btn {
+            opacity: 0;
+        }
+
+        .sidebar-row:hover .close-btn,
+        .sidebar-row:focus-within .close-btn {
+            opacity: 1;
         }
 
         @keyframes sidebar-shimmer {
@@ -4354,7 +4548,7 @@ fn install_theme() {
             to { opacity: 1.0; }
         }
 
-        .sidebar-loading image {
+        .sidebar-loading image.favicon {
             animation: sidebar-shimmer 700ms ease-in-out infinite alternate;
         }
         "#,
@@ -4441,6 +4635,21 @@ fn build_ui(app: &adw::Application) {
     key_btn.add_css_class("flat");
     key_btn.set_visible(false);
 
+    /// One shared engine menu: the address-bar picker and the hamburger
+    /// submenu show the same items, so they can never disagree.
+    fn engine_menu_model() -> gio::Menu {
+        let engine_menu = gio::Menu::new();
+        for (idx, engine) in SearchEngine::ALL.iter().enumerate() {
+            let item = gio::MenuItem::new(Some(engine.name()), None);
+            item.set_action_and_target_value(
+                Some("win.set-engine"),
+                Some(&(idx as u32).to_variant()),
+            );
+            engine_menu.append_item(&item);
+        }
+        engine_menu
+    }
+
     // Saved-username popover anchored to the key icon.
     let key_pop = gtk4::Popover::new();
     key_pop.set_parent(&key_btn);
@@ -4452,10 +4661,15 @@ fn build_ui(app: &adw::Application) {
     omnibox_box.add_css_class("omnibox-frame");
     omnibox_box.set_hexpand(true);
     omnibox_box.set_size_request(-1, 40);
-    // The bar keeps a single address field plus the contextual key icon
-    // (hidden unless the page has a login form). Everything else lives in
-    // the hamburger menu.
+    // The bar keeps a single address field, the engine picker badge, and
+    // the contextual key icon (hidden unless the page has a login form).
+    // Everything else lives in the hamburger menu.
     omnibox_box.append(&entry);
+    let engine_btn = gtk4::MenuButton::new();
+    engine_btn.set_label(prefs.borrow().engine.name());
+    engine_btn.set_tooltip_text(Some("Search engine (address bar + start page)"));
+    engine_btn.set_popover(Some(&gtk4::PopoverMenu::from_model(Some(&engine_menu_model()))));
+    omnibox_box.append(&engine_btn);
     omnibox_box.append(&key_btn);
 
     // Single hamburger menu: every lesser-used action stays reachable with
@@ -4469,18 +4683,7 @@ fn build_ui(app: &adw::Application) {
     menu.append(Some("Zoom In"), Some("win.zoom-in"));
     menu.append(Some("Zoom Out"), Some("win.zoom-out"));
     menu.append(Some("Reset Zoom"), Some("win.zoom-reset"));
-    {
-        let engine_menu = gio::Menu::new();
-        for (idx, engine) in SearchEngine::ALL.iter().enumerate() {
-            let item = gio::MenuItem::new(Some(engine.name()), None);
-            item.set_action_and_target_value(
-                Some("win.set-engine"),
-                Some(&(idx as u32).to_variant()),
-            );
-            engine_menu.append_item(&item);
-        }
-        menu.append_submenu(Some("Search Engine"), &engine_menu);
-    }
+    menu.append_submenu(Some("Search Engine"), &engine_menu_model());
     menu.append(Some("Reopen Closed Tab"), Some("win.reopen-tab"));
     menu.append(Some("Close Tab"), Some("win.close-tab"));
     menu.append(Some("Pin Tab"), Some("win.toggle-pin"));
@@ -4529,25 +4732,35 @@ fn build_ui(app: &adw::Application) {
     // either way. Pinned tabs get their own icon row above the list.
     let sidebar_label = gtk4::Label::new(Some("Tabs"));
     sidebar_label.set_xalign(0.0);
-    sidebar_label.set_hexpand(true);
     let sidebar_collapse = gtk4::Button::from_icon_name("sidebar-hide-symbolic");
     sidebar_collapse.set_tooltip_text(Some("Collapse sidebar to icons"));
     sidebar_collapse.add_css_class("flat");
-    let sidebar_head = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+    // CenterBox, not Box: a plain box ORs its children's expand flags, which
+    // leaked expansion into the revealer and stretched the sidebar to half
+    // the window. CenterBox never computes expand, so the 220 px request
+    // below is a real width, not a floor.
+    let sidebar_head = gtk4::CenterBox::new();
     sidebar_head.set_margin_top(6);
     sidebar_head.set_margin_bottom(6);
     sidebar_head.set_margin_start(8);
     sidebar_head.set_margin_end(8);
-    sidebar_head.append(&sidebar_label);
-    sidebar_head.append(&sidebar_collapse);
-    let sidebar_pins = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
+    sidebar_head.set_start_widget(Some(&sidebar_label));
+    sidebar_head.set_end_widget(Some(&sidebar_collapse));
+    // Icon-only pinned tabs wrap instead of widening the strip; every icon
+    // is capped so content can never drive the sidebar width.
+    let sidebar_pins = gtk4::FlowBox::new();
+    sidebar_pins.set_selection_mode(gtk4::SelectionMode::None);
+    sidebar_pins.set_homogeneous(true);
     sidebar_pins.set_margin_start(8);
     sidebar_pins.set_margin_end(8);
     sidebar_pins.set_visible(false);
     let sidebar_list = gtk4::ListBox::new();
-    sidebar_list.set_selection_mode(gtk4::SelectionMode::Single);
+    // Single highlight only: the row class marks selection, so the list
+    // itself selects nothing.
+    sidebar_list.set_selection_mode(gtk4::SelectionMode::None);
     let sidebar_scroll = gtk4::ScrolledWindow::new();
     sidebar_scroll.set_child(Some(&sidebar_list));
+    sidebar_scroll.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
     sidebar_scroll.set_vexpand(true);
     let sidebar_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
     sidebar_box.append(&sidebar_head);
@@ -4556,6 +4769,7 @@ fn build_ui(app: &adw::Application) {
     let sidebar_reveal = gtk4::Revealer::new();
     sidebar_reveal.set_transition_type(gtk4::RevealerTransitionType::SlideRight);
     sidebar_reveal.set_transition_duration(200);
+    sidebar_reveal.set_size_request(220, -1);
     sidebar_reveal.set_child(Some(&sidebar_box));
     sidebar_reveal.set_reveal_child(false);
     tab_view.set_hexpand(true);
@@ -4614,6 +4828,7 @@ fn build_ui(app: &adw::Application) {
         progress,
         read_progress,
         key_btn,
+        engine_btn: engine_btn.clone(),
         find_bar: find_bar.clone(),
         find_entry: find_entry.clone(),
         find_status,
@@ -4624,19 +4839,23 @@ fn build_ui(app: &adw::Application) {
         last_sample: RefCell::new(None),
         last_newtab,
         suggest_pop: suggest_popover.clone(),
-        sidebar_box,
         sidebar_reveal: sidebar_reveal.clone(),
         sidebar_pins: sidebar_pins.clone(),
         sidebar_list: sidebar_list.clone(),
+        sidebar_head_label: sidebar_label.clone(),
+        sidebar_collapse_btn: sidebar_collapse.clone(),
+        header_sidebar_btn: sidebar_btn.clone(),
         sidebar_pages: RefCell::new(Vec::new()),
         sidebar_visible: RefCell::new(prefs.borrow().sidebar_visible),
         sidebar_rail: RefCell::new(prefs.borrow().sidebar_collapsed),
+        prev_selected: RefCell::new(None),
         key_pop,
         key_list: key_list.clone(),
         shield: Rc::new(RefCell::new(ShieldStore::new(data_file("shield.json")))),
         curtain: Rc::new(RefCell::new(CurtainStore::new(data_file("curtain.json")))),
         vault: Rc::new(RefCell::new(FileVaultStore::new(data_file("vault.json")))),
         picker_armed: RefCell::new(false),
+        picker_view: RefCell::new(None),
         settings_win: RefCell::new(None),
         popouts: RefCell::new(Vec::new()),
         history,
@@ -4649,8 +4868,9 @@ fn build_ui(app: &adw::Application) {
         tabs: Rc::new(RefCell::new(Tabs::new())),
     });
     // Restore the persisted sidebar shape before first paint.
-    shell.sidebar_box.set_size_request(if *shell.sidebar_rail.borrow() { 52 } else { 220 }, -1);
+    shell.sidebar_reveal.set_size_request(if *shell.sidebar_rail.borrow() { 52 } else { 220 }, -1);
     shell.sidebar_reveal.set_reveal_child(*shell.sidebar_visible.borrow());
+    shell.sync_header_sidebar_btn();
 
     {
         let s = shell.clone();
@@ -5370,6 +5590,13 @@ fn handle_bench_job(
 }
 
 fn main() {
+    // Our appearance pref owns this process's theme. A user-set GTK_THEME
+    // makes libadwaita ignore color-scheme switches entirely, which reads
+    // as "light mode does nothing", so it goes before any adw init.
+    // SAFETY: first statement of main; no other thread exists yet.
+    unsafe {
+        std::env::remove_var("GTK_THEME");
+    }
     let app = adw::Application::builder().application_id("org.br0x.Browser").build();
     app.connect_activate(build_ui);
     app.run();
@@ -5538,6 +5765,7 @@ mod tests {
         assert_eq!(strip_state_badges("News • Sleeping"), "News");
         assert_eq!(strip_state_badges("News • Parked"), "News");
         assert_eq!(strip_state_badges("News"), "News");
+        assert_eq!(strip_state_badges("News • Parked • Sleeping"), "News");
     }
 
     #[test]
