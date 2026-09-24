@@ -2513,7 +2513,17 @@ impl Shell {
         }
         scored.sort_by_key(|s| (s.0, s.1));
         scored.truncate(PALETTE_LIMIT);
-        scored.into_iter().map(|(_, _, hit)| hit).collect()
+        let mut hits: Vec<PaletteHit> = scored.into_iter().map(|(_, _, hit)| hit).collect();
+        // The typed text stays runnable no matter how many rows match:
+        // trailing search row, never truncated away.
+        if !needle.trim().is_empty() {
+            let engine = self.prefs.borrow().engine;
+            hits.push(PaletteHit::Go {
+                title: format!("Search {} for \"{}\"", engine.name(), needle.trim()),
+                url: search::resolve(needle, engine),
+            });
+        }
+        hits
     }
 
     /// Render the palette rows for the current entry text.
@@ -2546,6 +2556,10 @@ impl Shell {
             stack.append(&title_label);
             stack.append(&hint_label);
             let row = gtk4::ListBoxRow::new();
+            // Rows never take focus: clicks must not move it out of the
+            // entry, or the focus-leave dismiss wins the race against
+            // activation. Arrows still move the selection.
+            row.set_focusable(false);
             row.set_child(Some(&stack));
             self.palette_list.append(&row);
         }
@@ -3124,6 +3138,8 @@ impl Shell {
         icon.set_valign(gtk4::Align::Center);
         icon.add_css_class("favicon");
         slot.append(&icon);
+        // Rail rows carry no close button at all.
+        let mut close_btn: Option<gtk4::Button> = None;
         if !rail {
             let title = gtk4::Label::new(None);
             let name =
@@ -3157,15 +3173,49 @@ impl Shell {
             close.add_css_class("flat");
             close.add_css_class("close-btn");
             close.set_valign(gtk4::Align::Center);
+            close.set_visible(false);
             let page = item.page.clone();
             let tv = tab_view.clone();
             close.connect_clicked(move |_| {
                 tv.close_page(&page);
             });
             slot.append(&close);
+            close_btn = Some(close);
         }
         let row = gtk4::ListBoxRow::new();
         row.set_child(Some(&slot));
+        // Hover or keyboard focus reveals the close button. Driven here,
+        // not in CSS: a hidden widget takes no clicks, opacity would not.
+        if let Some(close) = close_btn {
+            let show = close.downgrade();
+            let hide = close.downgrade();
+            let motion = gtk4::EventControllerMotion::new();
+            motion.connect_enter(move |_, _, _| {
+                if let Some(c) = show.upgrade() {
+                    c.set_visible(true);
+                }
+            });
+            motion.connect_leave(move |_| {
+                if let Some(c) = hide.upgrade() {
+                    c.set_visible(false);
+                }
+            });
+            row.add_controller(motion);
+            let focus_show = close.downgrade();
+            let focus_hide = close.downgrade();
+            let focus = gtk4::EventControllerFocus::new();
+            focus.connect_enter(move |_| {
+                if let Some(c) = focus_show.upgrade() {
+                    c.set_visible(true);
+                }
+            });
+            focus.connect_leave(move |_| {
+                if let Some(c) = focus_hide.upgrade() {
+                    c.set_visible(false);
+                }
+            });
+            row.add_controller(focus);
+        }
         row.add_css_class("sidebar-row");
         if item.selected {
             row.add_css_class("sidebar-row-active");
@@ -3482,6 +3532,8 @@ impl Shell {
                 shell_started.apply_shield_to_view(v);
                 shell_started.apply_curtain_to_view(v);
                 shell_started.refresh_key_button();
+                shell_started.refresh_menu_labels();
+                shell_started.refresh_star_button();
                 shell_started.refresh_sidebar();
             }
             if event == webkit6::LoadEvent::Finished
@@ -3498,6 +3550,8 @@ impl Shell {
                 let shell_done = shell_started.clone();
                 let page_done = page_started.clone();
                 shell_started.refresh_sidebar();
+                shell_started.refresh_menu_labels();
+                shell_started.refresh_star_button();
                 eval_flag(v, HAS_PASSWORD_JS, move |has| {
                     if let Some(entry) = shell_done.tabs.borrow_mut().entry_mut(&page_done) {
                         entry.meta.has_password = has;
@@ -3908,10 +3962,12 @@ impl Shell {
     /// rebuilt fresh on every open so rows never show stale prefs.
     #[allow(deprecated)]
     fn open_settings(self: &Rc<Self>) {
-        // Take the slot before closing: the borrow ends with this statement,
-        // so a synchronous close-request (which clears the same slot) can
-        // neither panic on a held borrow nor wipe the replacement window.
-        if let Some(win) = self.settings_win.borrow_mut().take() {
+        // Take in its own statement: an if-let scrutinee borrow would live
+        // through the body, and the synchronous close-request below
+        // borrows the same slot. Taken first, the handler only clears an
+        // already-empty slot in either timing.
+        let old = self.settings_win.borrow_mut().take();
+        if let Some(win) = old {
             win.close();
         }
         let win = SettingsWindow::new();
@@ -4917,17 +4973,9 @@ fn install_theme() {
             font-size: 11px;
         }
 
-        /* Close buttons hide without hit-testing at rest, so the right
-        edge of a row is never an invisible close target. Titles keep
-        their full width either way. */
-        .sidebar-row .close-btn {
-            visibility: hidden;
-        }
-
-        .sidebar-row:hover .close-btn,
-        .sidebar-row:focus-within .close-btn {
-            visibility: visible;
-        }
+        /* Close-button visibility is driven from sidebar_row on hover and
+        focus: GTK CSS has no visibility property, and opacity alone
+        would leave an invisible close target on the row edge. */
 
         @keyframes sidebar-shimmer {
             from { opacity: 0.45; }
@@ -5404,6 +5452,9 @@ fn build_ui(app: &adw::Application) {
         let s = shell.clone();
         let list = s.palette_list.clone();
         let keys = gtk4::EventControllerKey::new();
+        // Capture: the search entry claims Escape for stop-search at target
+        // phase, so a bubble handler would never see the dismiss key.
+        keys.set_propagation_phase(gtk4::PropagationPhase::Capture);
         keys.connect_key_pressed(move |_, keyval, _, _| match keyval {
             gtk4::gdk::Key::Escape => {
                 s.hide_palette();
