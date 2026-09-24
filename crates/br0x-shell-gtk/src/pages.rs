@@ -86,7 +86,7 @@ pub fn history_row(url: &str, title: &str, domain: &str, time: &str) -> String {
         title = html_escape(title),
         domain = html_escape(domain),
         haystack = html_escape(&haystack),
-        fav = avatar_tile(&letter),
+        fav = site_icon(domain, &letter),
         time = html_escape(time),
     )
 }
@@ -293,6 +293,14 @@ pub fn history_html(history: &History, query: Option<&str>, clear: bool, scheme:
     .fav-letter {{
       line-height: 1;
     }}
+    .fav-img {{
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      background-color: inherit;
+    }}
     td.col-when {{
       color: light-dark(#757575, #9e9e9e);
       font-size: 12px;
@@ -494,7 +502,7 @@ pub fn site_card(url: &str, name: &str, key: Option<&str>, class: &str) -> Strin
         class = html_escape(class),
         url = html_escape(url),
         key_attr = key_attr,
-        fav = avatar_tile(&letter),
+        fav = site_icon(domain, &letter),
         name = html_escape(name),
         domain = html_escape(domain),
         key_badge = key_badge,
@@ -517,6 +525,31 @@ pub fn avatar_tile(letter: &str) -> String {
         r#"<span class="fav" aria-hidden="true"><span class="fav-letter">{letter}</span></span>"#,
         letter = html_escape(letter),
     )
+}
+
+/// The stored icon for a host, if one was saved when that site was last
+/// visited. Served from the shell's own scheme, so a page can show real site
+/// icons without asking any third party.
+fn stored_icon(host: &str) -> Option<String> {
+    let key = crate::favicon_key(host);
+    if key.is_empty() || key == "local" {
+        return None;
+    }
+    let path = crate::favicon_path(&key);
+    std::path::Path::new(&path).exists().then(|| format!("br0x://favicon/{key}"))
+}
+
+/// A site's icon: the stored favicon when we have one, otherwise the letter
+/// tile, which needs no network and always renders.
+fn site_icon(host: &str, letter: &str) -> String {
+    match stored_icon(host) {
+        Some(url) => format!(
+            r#"<span class="fav" aria-hidden="true"><span class="fav-letter">{letter}</span><img class="fav-img" src="{url}" alt="" onerror="this.remove()"></span>"#,
+            letter = html_escape(letter),
+            url = html_escape(&url),
+        ),
+        None => avatar_tile(letter),
+    }
 }
 
 const SHORTCUTS: [(&str, &str, &str); 6] = [
@@ -757,6 +790,14 @@ pub fn newtab_html(engine: SearchEngine, frequent: &[Visit], scheme: Scheme) -> 
     }}
     .fav-letter {{
       line-height: 1;
+    }}
+    .fav-img {{
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      background-color: inherit;
     }}
     .card-text {{
       display: flex;
@@ -1031,6 +1072,15 @@ pub fn newtab_html(engine: SearchEngine, frequent: &[Visit], scheme: Scheme) -> 
           fl.className = 'fav-letter';
           fl.textContent = letter;
           fav.appendChild(fl);
+          var iconUrl = pin.icon || '';
+          if (iconUrl) {{
+            var im = document.createElement('img');
+            im.className = 'fav-img';
+            im.alt = '';
+            im.src = iconUrl;
+            im.onerror = function() {{ this.remove(); }};
+            fav.appendChild(im);
+          }}
           var text = document.createElement('span');
           text.className = 'card-text';
           var nm = document.createElement('span');

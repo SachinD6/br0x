@@ -125,8 +125,11 @@ def main():
                 continue
             if "#" in value or "rgb(" in value or "rgba(" in value:
                 problems.append(f"theme: raw color in '{stripped}'")
-        if "background-color: var(--sidebar-bg-color)" not in css:
-            problems.append("theme: sidebar surface is not painted unconditionally")
+        # The sidebar must be painted by whichever sheet owns the palette, or
+        # a stuck toolkit variant shows through as a dark column.
+        src = open("crates/br0x-shell-gtk/src/theme.rs").read()
+        if ".br0x-sidebar {" not in src or "background-color: {sidebar_bg}" not in src:
+            problems.append("theme: sidebar surface is not painted")
 
     for p in problems:
         print(p)
