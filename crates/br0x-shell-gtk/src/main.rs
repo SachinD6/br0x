@@ -1796,6 +1796,59 @@ fn suggest_row_count(list: &gtk4::ListBox) -> usize {
     count as usize
 }
 
+/// Subsequence fuzzy score, lower is better. Matches case-insensitively in
+/// order; each skipped character costs, so prefix and tight matches win.
+/// Empty needle matches everything at zero: the zero-typing list.
+fn fuzzy_score(needle: &str, haystack: &str) -> Option<u32> {
+    let needle: Vec<char> = needle.to_lowercase().chars().collect();
+    if needle.is_empty() {
+        return Some(0);
+    }
+    let hay: Vec<char> = haystack.to_lowercase().chars().collect();
+    let mut h = 0;
+    let mut score = 0u32;
+    for (n, nc) in needle.iter().enumerate() {
+        let pos = hay[h..].iter().position(|c| c == nc)?;
+        score += pos as u32 + if n == 0 { 0 } else { 1 };
+        h += pos + 1;
+    }
+    Some(score)
+}
+
+/// One palette row: a tab to switch to, a place to open, or an action.
+#[derive(Clone)]
+enum PaletteHit {
+    Tab { title: String, url: String, page: adw::TabPage },
+    Go { title: String, url: String },
+    Action { label: String, hint: &'static str, action: &'static str },
+}
+
+/// Every palette-runnable action: label, shortcut hint, win.* action name.
+const PALETTE_ACTIONS: &[(&str, &str, &str)] = &[
+    ("New Tab", "Ctrl+T", "new-tab"),
+    ("Reopen Closed Tab", "Ctrl+Shift+T", "reopen-tab"),
+    ("Focus Mode", "Ctrl+Shift+F", "focus-mode"),
+    ("Find in Page", "Ctrl+F", "find"),
+    ("Bookmark This Page", "Ctrl+D", "bookmark-page"),
+    ("Pin Tab", "Ctrl+Shift+P", "toggle-pin"),
+    ("Reader Mode", "Ctrl+Shift+R", "reader"),
+    ("Hide Element", "Ctrl+Shift+H", "curtain-pick"),
+    ("Ad Blocker for Site", "Ctrl+Shift+S", "toggle-shield"),
+    ("Toggle Sidebar", "F9", "toggle-sidebar"),
+    ("History", "Ctrl+H", "history"),
+    ("Copy URL", "", "copy-url"),
+    ("Go Back", "Alt+Left", "back"),
+    ("Go Forward", "Alt+Right", "forward"),
+    ("Reload", "Ctrl+R", "reload"),
+    ("Zoom In", "Ctrl++", "zoom-in"),
+    ("Zoom Out", "Ctrl+-", "zoom-out"),
+    ("Reset Zoom", "Ctrl+0", "zoom-reset"),
+    ("Settings", "Ctrl+,", "settings"),
+];
+
+/// Most palette rows shown at once.
+const PALETTE_LIMIT: usize = 9;
+
 /// Lowercase host of a URI without port, path, query or fragment.
 /// Delegates to the core shield normalizer so the shell and the store agree.
 fn domain_of(uri: &str) -> String {
@@ -2100,6 +2153,8 @@ struct Shell {
     last_sample: RefCell<Option<(Instant, br0x_core::tab::SysState)>>,
     /// Engine, frequent list and scheme the start page file was last built from.
     last_newtab: RefCell<Option<(SearchEngine, Vec<Visit>, Appearance)>>,
+    /// Address bar suggestion list, dismissed when the palette summons.
+    suggest_pop: gtk4::Popover,
     sidebar_reveal: gtk4::Revealer,
     sidebar_box: gtk4::Box,
     sidebar_pins: gtk4::FlowBox,
@@ -2109,6 +2164,11 @@ struct Shell {
     header_sidebar_btn: gtk4::Button,
     /// Reloadable provider pinning chrome surfaces to the chosen scheme.
     scheme_css: gtk4::CssProvider,
+    toolbar: adw::ToolbarView,
+    palette_card: gtk4::Box,
+    palette_entry: gtk4::SearchEntry,
+    palette_list: gtk4::ListBox,
+    palette_store: RefCell<Vec<PaletteHit>>,
     sidebar_pages: RefCell<Vec<adw::TabPage>>,
     sidebar_visible: RefCell<bool>,
     sidebar_rail: RefCell<bool>,
@@ -2316,28 +2376,203 @@ impl Shell {
         }
     }
 
-    /// Open tabs matching `needle` for the palette: (title, url, page).
+    /// Every tab with its live identity: title plus real URL even when the
+    /// view sits on about:blank after a release.
+    fn all_tabs(&self) -> Vec<(String, String, adw::TabPage)> {
+        let tabs = self.tabs.borrow();
+        tabs.entries
+            .iter()
+            .map(|entry| {
+                let title = strip_state_badges(entry.page.title().as_ref());
+                // A released tab sits on about:blank: match its real URL.
+                let live = entry.view.uri().map(|uri| uri.to_string()).unwrap_or_default();
+                let url = if live.is_empty() || is_blank_uri(&live) {
+                    entry.meta.pending_url.clone().unwrap_or_default()
+                } else {
+                    live
+                };
+                (title, url, entry.page.clone())
+            })
+            .collect()
+    }
+
+    /// Open tabs matching `needle` for the address bar: (title, url, page).
     fn open_tab_hits(&self, needle: &str) -> Vec<(String, String, adw::TabPage)> {
         let query = needle.to_lowercase();
-        let tabs = self.tabs.borrow();
-        let mut out = Vec::new();
-        for entry in tabs.entries.iter() {
-            let title = strip_state_badges(entry.page.title().as_ref());
-            // A released tab sits on about:blank: match its real URL.
-            let live = entry.view.uri().map(|uri| uri.to_string()).unwrap_or_default();
-            let url = if live.is_empty() || is_blank_uri(&live) {
-                entry.meta.pending_url.clone().unwrap_or_default()
+        self.all_tabs()
+            .into_iter()
+            .filter(|(title, url, _)| {
+                title.to_lowercase().contains(&query) || url.to_lowercase().contains(&query)
+            })
+            .take(4)
+            .collect()
+    }
+
+    /// Ranked palette rows over tabs, actions, history, and bookmarks.
+    /// Empty needle lists open tabs only: the zero-typing tab switcher.
+    fn palette_hits(&self, needle: &str) -> Vec<PaletteHit> {
+        let query = needle.trim();
+        let mut scored: Vec<(u32, u8, PaletteHit)> = Vec::new();
+        for (title, url, page) in self.all_tabs() {
+            let name = if title.trim().is_empty() {
+                display_domain(&url).to_owned()
             } else {
-                live
+                title.clone()
             };
-            if title.to_lowercase().contains(&query) || url.to_lowercase().contains(&query) {
-                out.push((title, url, entry.page.clone()));
-                if out.len() >= 4 {
-                    break;
+            if let Some(score) = fuzzy_score(query, &name).or_else(|| fuzzy_score(query, &url)) {
+                scored.push((score, 0, PaletteHit::Tab { title: name, url, page }));
+            }
+        }
+        if !query.is_empty() {
+            for (label, hint, action) in PALETTE_ACTIONS {
+                if let Some(score) = fuzzy_score(query, label) {
+                    scored.push((
+                        score,
+                        1,
+                        PaletteHit::Action { label: label.to_string(), hint, action },
+                    ));
+                }
+            }
+            if let Some(history) = self.history.borrow().as_ref() {
+                for visit in history.recent(60).unwrap_or_default() {
+                    let name = if visit.title.trim().is_empty() {
+                        display_domain(&visit.url).to_owned()
+                    } else {
+                        visit.title.clone()
+                    };
+                    if let Some(score) =
+                        fuzzy_score(query, &name).or_else(|| fuzzy_score(query, &visit.url))
+                    {
+                        scored.push((score, 2, PaletteHit::Go { title: name, url: visit.url }));
+                    }
+                }
+            }
+            for mark in self.bookmarks.borrow().iter() {
+                let name = if mark.title.trim().is_empty() {
+                    mark.url.clone()
+                } else {
+                    mark.title.clone()
+                };
+                if let Some(score) =
+                    fuzzy_score(query, &name).or_else(|| fuzzy_score(query, &mark.url))
+                {
+                    scored.push((score, 2, PaletteHit::Go { title: name, url: mark.url.clone() }));
                 }
             }
         }
-        out
+        scored.sort_by_key(|s| (s.0, s.1));
+        scored.truncate(PALETTE_LIMIT);
+        scored.into_iter().map(|(_, _, hit)| hit).collect()
+    }
+
+    /// Render the palette rows for the current entry text.
+    fn render_palette(&self) {
+        let query = self.palette_entry.text().to_string();
+        let hits = self.palette_hits(&query);
+        self.palette_list.remove_all();
+        for hit in &hits {
+            let (name, hint) = match hit {
+                PaletteHit::Tab { title, url, .. } => (title.clone(), format!("Open tab · {url}")),
+                PaletteHit::Go { title, url } => (title.clone(), url.clone()),
+                PaletteHit::Action { label, hint, .. } => (label.clone(), hint.to_string()),
+            };
+            let stack = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+            stack.set_margin_top(5);
+            stack.set_margin_bottom(5);
+            stack.set_margin_start(12);
+            stack.set_margin_end(12);
+            let title_label = gtk4::Label::new(Some(&name));
+            title_label.set_xalign(0.0);
+            title_label.set_hexpand(true);
+            title_label.set_max_width_chars(60);
+            title_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+            let hint_label = gtk4::Label::new(Some(&hint));
+            hint_label.set_xalign(0.0);
+            hint_label.set_hexpand(true);
+            hint_label.set_max_width_chars(60);
+            hint_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+            hint_label.add_css_class("dim-label");
+            stack.append(&title_label);
+            stack.append(&hint_label);
+            let row = gtk4::ListBoxRow::new();
+            row.set_child(Some(&stack));
+            self.palette_list.append(&row);
+        }
+        *self.palette_store.borrow_mut() = hits;
+        if self.palette_list.row_at_index(0).is_some() {
+            self.palette_list.select_row(self.palette_list.row_at_index(0).as_ref());
+        }
+    }
+
+    /// Run the selected palette row, the first row, or the typed text.
+    fn activate_palette(self: &Rc<Self>) {
+        let hit = {
+            let hits = self.palette_store.borrow();
+            self.palette_list
+                .selected_row()
+                .and_then(|row| usize::try_from(row.index()).ok())
+                .filter(|i| *i < hits.len())
+                .and_then(|i| hits.get(i).cloned())
+        };
+        self.hide_palette();
+        match hit {
+            Some(PaletteHit::Tab { page, .. }) => {
+                self.tab_view.set_selected_page(&page);
+                if let Some(v) = selected_view(&self.tab_view) {
+                    v.grab_focus();
+                }
+            }
+            Some(PaletteHit::Go { url, .. }) => {
+                if let Some(v) = selected_view(&self.tab_view) {
+                    v.load_uri(&url);
+                    v.grab_focus();
+                }
+            }
+            Some(PaletteHit::Action { action, .. }) => {
+                gio::prelude::ActionGroupExt::activate_action(&self.window, action, None);
+            }
+            None => {
+                let query = self.palette_entry.text().to_string();
+                if !query.trim().is_empty()
+                    && let Some(v) = selected_view(&self.tab_view)
+                {
+                    v.load_uri(&search::resolve(&query, self.prefs.borrow().engine));
+                    v.grab_focus();
+                }
+            }
+        }
+    }
+
+    /// Summon the palette over the page, listing open tabs immediately.
+    fn toggle_palette(self: &Rc<Self>) {
+        if self.palette_card.is_visible() {
+            self.hide_palette();
+            if let Some(v) = selected_view(&self.tab_view) {
+                v.grab_focus();
+            }
+            return;
+        }
+        self.suggest_pop.popdown();
+        self.palette_entry.set_text("");
+        self.render_palette();
+        self.palette_card.set_visible(true);
+        self.palette_entry.grab_focus();
+    }
+
+    fn hide_palette(&self) {
+        self.palette_card.set_visible(false);
+    }
+
+    /// Immersive mode: the top bars slide away and the page owns the
+    /// window. Session-only, so a restart never traps anyone chromeless.
+    fn toggle_focus_mode(self: &Rc<Self>) {
+        let hiding = self.toolbar.reveals_top_bars();
+        self.toolbar.set_reveal_top_bars(!hiding);
+        self.toasts.add_toast(adw::Toast::new(if hiding {
+            "Focus mode on — Ctrl+Shift+F brings the chrome back"
+        } else {
+            "Focus mode off"
+        }));
     }
 
     /// Apply the blocker's effective state to `view`: an explicit per-site
@@ -2883,7 +3118,12 @@ impl Shell {
         if item.selected {
             row.add_css_class("sidebar-row-active");
         }
-        if item.loading {
+        // Honor reduced motion: the loading shimmer stays off when the
+        // toolkit animations are disabled.
+        let animations = gtk4::Settings::default()
+            .map(|s| s.property::<bool>("gtk-enable-animations"))
+            .unwrap_or(true);
+        if item.loading && animations {
             row.add_css_class("sidebar-loading");
         }
         let mut tip = if item.title.is_empty() { "New Tab".to_owned() } else { item.title.clone() };
@@ -4231,10 +4471,26 @@ impl Shell {
         let s = self.clone();
         add(
             "focus-url",
-            &["<Control>l", "<Control>k"],
+            &["<Control>l"],
             Box::new(move || {
                 s.entry.grab_focus();
                 s.entry.select_region(0, -1);
+            }),
+        );
+        let s = self.clone();
+        add(
+            "palette",
+            &["<Control>k"],
+            Box::new(move || {
+                s.toggle_palette();
+            }),
+        );
+        let s = self.clone();
+        add(
+            "focus-mode",
+            &["<Control><Shift>f"],
+            Box::new(move || {
+                s.toggle_focus_mode();
             }),
         );
         let s = self.clone();
@@ -4591,6 +4847,23 @@ fn install_theme() {
         .sidebar-loading image.favicon {
             animation: sidebar-shimmer 700ms ease-in-out infinite alternate;
         }
+
+        /* One motion language: quick hovers, calm reveals. */
+        .sidebar-row,
+        headerbar button,
+        .omnibox-frame {
+            transition: background-color 200ms cubic-bezier(0.32, 0.72, 0, 1),
+                border-color 200ms cubic-bezier(0.32, 0.72, 0, 1),
+                box-shadow 200ms cubic-bezier(0.32, 0.72, 0, 1);
+        }
+
+        .palette-card {
+            background-color: var(--view-bg-color, @view_bg_color);
+            border-radius: 16px;
+            border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+            box-shadow: 0 12px 40px color-mix(in srgb, currentColor 22%, transparent);
+            padding-bottom: 8px;
+        }
         "#,
     );
     if let Some(display) = gtk4::gdk::Display::default() {
@@ -4721,6 +4994,7 @@ fn build_ui(app: &adw::Application) {
     menu.append(Some("Bookmark This Page"), Some("win.bookmark-page"));
     menu.append(Some("Bookmarks…"), Some("win.show-bookmarks"));
     menu.append(Some("Find in Page"), Some("win.find"));
+    menu.append(Some("Command Palette"), Some("win.palette"));
     menu.append(Some("Zoom In"), Some("win.zoom-in"));
     menu.append(Some("Zoom Out"), Some("win.zoom-out"));
     menu.append(Some("Reset Zoom"), Some("win.zoom-reset"));
@@ -4740,6 +5014,7 @@ fn build_ui(app: &adw::Application) {
     menu.append(Some("Hide Element on Site"), Some("win.curtain-pick"));
     menu.append(Some("Unhide All on Site"), Some("win.curtain-clear"));
     menu.append(Some("Sidebar"), Some("win.toggle-sidebar"));
+    menu.append(Some("Focus Mode"), Some("win.focus-mode"));
     menu.append(Some("Settings…"), Some("win.settings"));
     menu.append(Some("Quit"), Some("win.quit"));
     let menu_btn = gtk4::MenuButton::builder()
@@ -4840,13 +5115,43 @@ fn build_ui(app: &adw::Application) {
     find_bar.set_show_close_button(true);
     find_bar.connect_entry(&find_entry);
 
+    // Centered command palette: entry plus ranked rows on a floating card.
+    // An overlay centers it over the page; hidden costs nothing.
+    let palette_entry = gtk4::SearchEntry::new();
+    palette_entry.set_placeholder_text(Some("Type a command, tab, or address"));
+    palette_entry.set_hexpand(true);
+    let palette_list = gtk4::ListBox::new();
+    palette_list.set_selection_mode(gtk4::SelectionMode::Single);
+    let palette_scroll = gtk4::ScrolledWindow::new();
+    palette_scroll.set_child(Some(&palette_list));
+    palette_scroll.set_propagate_natural_height(true);
+    palette_scroll.set_max_content_height(430);
+    palette_scroll.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
+    let palette_head = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    palette_head.set_margin_top(8);
+    palette_head.set_margin_start(8);
+    palette_head.set_margin_end(8);
+    palette_head.append(&palette_entry);
+    let palette_card = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    palette_card.add_css_class("palette-card");
+    palette_card.append(&palette_head);
+    palette_card.append(&palette_scroll);
+    palette_card.set_halign(gtk4::Align::Center);
+    palette_card.set_valign(gtk4::Align::Start);
+    palette_card.set_margin_top(64);
+    palette_card.set_size_request(560, -1);
+    palette_card.set_visible(false);
+
     let toolbar = adw::ToolbarView::new();
     toolbar.add_top_bar(&header);
     toolbar.add_top_bar(&tab_bar);
     toolbar.add_top_bar(&read_progress);
     toolbar.add_top_bar(&progress);
     toolbar.add_top_bar(&find_bar);
-    toolbar.set_content(Some(&content_box));
+    let content_overlay = gtk4::Overlay::new();
+    content_overlay.set_child(Some(&content_box));
+    content_overlay.add_overlay(&palette_card);
+    toolbar.set_content(Some(&content_overlay));
 
     let toasts = adw::ToastOverlay::new();
     toasts.set_child(Some(&toolbar));
@@ -4872,7 +5177,6 @@ fn build_ui(app: &adw::Application) {
             }
         });
     }
-
     // History opens after first paint: suggestions, Frequent tiles and the
     // history page simply see an empty store until the database is ready,
     // instead of blocking the window on SQLite.
@@ -4914,6 +5218,7 @@ fn build_ui(app: &adw::Application) {
         last_save: RefCell::new(None),
         last_sample: RefCell::new(None),
         last_newtab,
+        suggest_pop: suggest_popover.clone(),
         sidebar_reveal: sidebar_reveal.clone(),
         sidebar_box: sidebar_box.clone(),
         sidebar_pins: sidebar_pins.clone(),
@@ -4922,6 +5227,11 @@ fn build_ui(app: &adw::Application) {
         sidebar_collapse_btn: sidebar_collapse.clone(),
         header_sidebar_btn: sidebar_btn.clone(),
         scheme_css: scheme_css.clone(),
+        toolbar: toolbar.clone(),
+        palette_card: palette_card.clone(),
+        palette_entry: palette_entry.clone(),
+        palette_list: palette_list.clone(),
+        palette_store: RefCell::new(Vec::new()),
         sidebar_pages: RefCell::new(Vec::new()),
         sidebar_visible: RefCell::new(prefs.borrow().sidebar_visible),
         sidebar_rail: RefCell::new(prefs.borrow().sidebar_collapsed),
@@ -4948,6 +5258,74 @@ fn build_ui(app: &adw::Application) {
     shell.sidebar_box.set_size_request(if *shell.sidebar_rail.borrow() { 52 } else { 220 }, -1);
     shell.sidebar_reveal.set_reveal_child(*shell.sidebar_visible.borrow());
     shell.sync_header_sidebar_btn();
+
+    // Palette wiring: typing re-ranks, arrows move, Enter runs, Escape
+    // dismisses back to the page. Clicking a row runs it directly.
+    {
+        let s = shell.clone();
+        let entry = s.palette_entry.clone();
+        entry.connect_changed(move |_| {
+            s.render_palette();
+        });
+    }
+    {
+        let s = shell.clone();
+        let entry = s.palette_entry.clone();
+        entry.connect_activate(move |_| {
+            s.activate_palette();
+        });
+    }
+    {
+        let s = shell.clone();
+        let entry = s.palette_entry.clone();
+        let focus = gtk4::EventControllerFocus::new();
+        focus.connect_leave(move |_| {
+            s.hide_palette();
+        });
+        entry.add_controller(focus);
+    }
+    {
+        let s = shell.clone();
+        let list = s.palette_list.clone();
+        let keys = gtk4::EventControllerKey::new();
+        keys.connect_key_pressed(move |_, keyval, _, _| match keyval {
+            gtk4::gdk::Key::Escape => {
+                s.hide_palette();
+                if let Some(v) = selected_view(&s.tab_view) {
+                    v.grab_focus();
+                }
+                glib::Propagation::Stop
+            }
+            gtk4::gdk::Key::Down | gtk4::gdk::Key::Up => {
+                let count = suggest_row_count(&list);
+                if count == 0 {
+                    return glib::Propagation::Proceed;
+                }
+                let current = list
+                    .selected_row()
+                    .and_then(|row| usize::try_from(row.index()).ok())
+                    .map(|i| i as isize);
+                let next = match (keyval, current) {
+                    (gtk4::gdk::Key::Down, Some(i)) => (i + 1) % count as isize,
+                    (gtk4::gdk::Key::Down, None) => 0,
+                    (_, Some(i)) => (i - 1 + count as isize) % count as isize,
+                    (_, None) => count as isize - 1,
+                };
+                list.select_row(list.row_at_index(next as i32).as_ref());
+                glib::Propagation::Stop
+            }
+            _ => glib::Propagation::Proceed,
+        });
+        entry.add_controller(keys);
+    }
+    {
+        let s = shell.clone();
+        let list = s.palette_list.clone();
+        list.connect_row_activated(move |list, row| {
+            list.select_row(Some(row));
+            s.activate_palette();
+        });
+    }
 
     {
         let s = shell.clone();
@@ -5700,6 +6078,15 @@ mod tests {
     #[test]
     fn scheme_chrome_system_pins_nothing() {
         assert!(scheme_chrome_css(Appearance::System).is_empty());
+    }
+
+    #[test]
+    fn fuzzy_score_ranks_tight_matches_first() {
+        assert_eq!(fuzzy_score("", "anything"), Some(0));
+        assert_eq!(fuzzy_score("xyz", "GitHub"), None);
+        assert_eq!(fuzzy_score("gh", "GitHub"), Some(3));
+        assert_eq!(fuzzy_score("GH", "github"), Some(3));
+        assert!(fuzzy_score("git", "GitHub") < fuzzy_score("gth", "GitHub"));
     }
 
     #[test]
