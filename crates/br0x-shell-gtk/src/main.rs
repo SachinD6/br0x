@@ -1029,6 +1029,7 @@ struct Shell {
     sidebar_reveal: gtk4::Revealer,
     sidebar_box: gtk4::Box,
     sidebar_pins: gtk4::FlowBox,
+    sidebar_pins_label: gtk4::Label,
     sidebar_list: gtk4::ListBox,
     sidebar_head_label: gtk4::Label,
     sidebar_collapse_btn: gtk4::Button,
@@ -1037,7 +1038,7 @@ struct Shell {
     palette_card: gtk4::Box,
     palette_entry: gtk4::SearchEntry,
     palette_list: gtk4::ListBox,
-    palette_store: RefCell<Vec<PaletteHit>>,
+    palette_store: RefCell<Vec<Option<PaletteHit>>>,
     /// Menu rows that name the current state instead of a fixed verb.
     pin_label: gtk4::Label,
     shield_label: gtk4::Label,
@@ -1469,7 +1470,27 @@ impl Shell {
         let query = self.palette_entry.text().to_string();
         let hits = self.palette_hits(&query);
         self.palette_list.remove_all();
+        let mut store_rows: Vec<Option<PaletteHit>> = Vec::with_capacity(hits.len() + 3);
+        let mut current_section = "";
         for hit in &hits {
+            let section = match hit {
+                PaletteHit::Tab { .. } => "Open tabs",
+                PaletteHit::Action { .. } => "Actions",
+                PaletteHit::Go { .. } => "History and bookmarks",
+            };
+            if section != current_section {
+                let header = gtk4::Label::new(Some(section));
+                header.set_xalign(0.0);
+                header.add_css_class("palette-section");
+                let row = gtk4::ListBoxRow::new();
+                row.set_activatable(false);
+                row.set_selectable(false);
+                row.set_focusable(false);
+                row.set_child(Some(&header));
+                self.palette_list.append(&row);
+                store_rows.push(None);
+                current_section = section;
+            }
             let (icon, name, hint) = match hit {
                 PaletteHit::Tab { title, url, .. } => {
                     ("web-browser-symbolic", title.clone(), format!("Open tab · {url}"))
@@ -1512,11 +1533,44 @@ impl Shell {
             row.set_focusable(false);
             row.set_child(Some(&row_box));
             self.palette_list.append(&row);
+            store_rows.push(Some(hit.clone()));
         }
-        *self.palette_store.borrow_mut() = hits;
-        if self.palette_list.row_at_index(0).is_some() {
-            self.palette_list.select_row(self.palette_list.row_at_index(0).as_ref());
+        *self.palette_store.borrow_mut() = store_rows;
+        self.select_first_palette_hit();
+    }
+
+    /// Select the first real entry, skipping any section header.
+    fn select_first_palette_hit(&self) {
+        let hits = self.palette_store.borrow();
+        for (index, entry) in hits.iter().enumerate() {
+            if entry.is_some() {
+                self.palette_list.select_row(self.palette_list.row_at_index(index as i32).as_ref());
+                return;
+            }
         }
+    }
+
+    /// Move the palette selection by `step`, skipping section headers.
+    fn step_palette_selection(&self, step: i32) -> bool {
+        let hits = self.palette_store.borrow();
+        let count = hits.len() as i32;
+        if count == 0 {
+            return false;
+        }
+        let current = self
+            .palette_list
+            .selected_row()
+            .map(|row| row.index())
+            .unwrap_or(if step > 0 { -1 } else { count });
+        let mut index = current;
+        for _ in 0..=count {
+            index = (index + step).rem_euclid(count);
+            if hits[index as usize].is_some() {
+                self.palette_list.select_row(self.palette_list.row_at_index(index).as_ref());
+                return true;
+            }
+        }
+        false
     }
 
     /// Run the selected palette row, the first row, or the typed text.
@@ -1526,8 +1580,7 @@ impl Shell {
             self.palette_list
                 .selected_row()
                 .and_then(|row| usize::try_from(row.index()).ok())
-                .filter(|i| *i < hits.len())
-                .and_then(|i| hits.get(i).cloned())
+                .and_then(|i| hits.get(i).cloned().flatten())
         };
         self.hide_palette();
         match hit {
@@ -2068,7 +2121,9 @@ impl Shell {
                 self.sidebar_list.append(&self.sidebar_row(item, &tab_view));
             }
         }
-        self.sidebar_pins.set_visible(items.iter().any(|i| i.pinned && !rail));
+        let has_pins = items.iter().any(|i| i.pinned && !rail);
+        self.sidebar_pins.set_visible(has_pins);
+        self.sidebar_pins_label.set_visible(has_pins);
         *self.sidebar_pages.borrow_mut() = pages;
         self.sync_sidebar_head();
     }
@@ -2172,6 +2227,13 @@ impl Shell {
                 badge_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
                 badge_label.set_max_width_chars(9);
                 badge_label.add_css_class("sidebar-badge");
+                badge_label.add_css_class(if item.sleeping {
+                    "badge-sleeping"
+                } else if item.parked {
+                    "badge-parked"
+                } else {
+                    "badge-loading"
+                });
                 slot.append(&badge_label);
             }
             let close = gtk4::Button::from_icon_name("window-close-symbolic");
@@ -4099,6 +4161,10 @@ fn build_ui(app: &adw::Application) {
     sidebar_head.set_end_widget(Some(&sidebar_collapse));
     // Icon-only pinned tabs wrap instead of widening the strip; every icon
     // is capped so content can never drive the sidebar width.
+    let sidebar_pins_label = gtk4::Label::new(Some("Pinned"));
+    sidebar_pins_label.set_xalign(0.0);
+    sidebar_pins_label.add_css_class("sidebar-section");
+    sidebar_pins_label.set_visible(false);
     let sidebar_pins = gtk4::FlowBox::new();
     sidebar_pins.set_selection_mode(gtk4::SelectionMode::None);
     sidebar_pins.set_homogeneous(true);
@@ -4119,6 +4185,7 @@ fn build_ui(app: &adw::Application) {
     // is a hard minimum even while hidden, permanently stealing 220 px.
     sidebar_box.set_size_request(280, -1);
     sidebar_box.append(&sidebar_head);
+    sidebar_box.append(&sidebar_pins_label);
     sidebar_box.append(&sidebar_pins);
     sidebar_box.append(&sidebar_scroll);
     let sidebar_reveal = gtk4::Revealer::new();
@@ -4251,6 +4318,7 @@ fn build_ui(app: &adw::Application) {
         sidebar_reveal: sidebar_reveal.clone(),
         sidebar_box: sidebar_box.clone(),
         sidebar_pins: sidebar_pins.clone(),
+        sidebar_pins_label: sidebar_pins_label.clone(),
         sidebar_list: sidebar_list.clone(),
         sidebar_head_label: sidebar_label.clone(),
         sidebar_collapse_btn: sidebar_collapse.clone(),
@@ -4331,22 +4399,14 @@ fn build_ui(app: &adw::Application) {
                 }
                 glib::Propagation::Stop
             }
-            gtk4::gdk::Key::Down | gtk4::gdk::Key::Up => {
-                let count = suggest_row_count(&list);
-                if count == 0 {
-                    return glib::Propagation::Proceed;
-                }
-                let current = list
-                    .selected_row()
-                    .and_then(|row| usize::try_from(row.index()).ok())
-                    .map(|i| i as isize);
-                let next = match (keyval, current) {
-                    (gtk4::gdk::Key::Down, Some(i)) => (i + 1) % count as isize,
-                    (gtk4::gdk::Key::Down, None) => 0,
-                    (_, Some(i)) => (i - 1 + count as isize) % count as isize,
-                    (_, None) => count as isize - 1,
-                };
-                list.select_row(list.row_at_index(next as i32).as_ref());
+            gtk4::gdk::Key::Down => {
+                s.step_palette_selection(1);
+                let _ = &list;
+                glib::Propagation::Stop
+            }
+            gtk4::gdk::Key::Up => {
+                s.step_palette_selection(-1);
+                let _ = &list;
                 glib::Propagation::Stop
             }
             _ => glib::Propagation::Proceed,
@@ -4357,6 +4417,10 @@ fn build_ui(app: &adw::Application) {
         let s = shell.clone();
         let list = s.palette_list.clone();
         list.connect_row_activated(move |list, row| {
+            let index = usize::try_from(row.index()).unwrap_or(usize::MAX);
+            if s.palette_store.borrow().get(index).is_some_and(|entry| entry.is_none()) {
+                return;
+            }
             list.select_row(Some(row));
             s.activate_palette();
         });
