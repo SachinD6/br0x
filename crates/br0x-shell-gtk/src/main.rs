@@ -2,6 +2,7 @@
 //! Thin UI over br0x-core policy. All timing rules live in core.
 
 mod bench;
+mod theme;
 use adw::prelude::*;
 use br0x_core::bookmarks::{Bookmark, BookmarkStore};
 use br0x_core::curtain::CurtainStore;
@@ -290,7 +291,7 @@ fn history_html(
     history: &History,
     query: Option<&str>,
     clear: bool,
-    appearance: Appearance,
+    scheme: theme::Scheme,
 ) -> String {
     if clear {
         let _ = history.clear();
@@ -592,7 +593,7 @@ fn history_html(
 </body>
 </html>"#,
         count_label = count_label,
-        scheme = scheme_token(appearance),
+        scheme = scheme.token(),
         q = html_escape(q),
         empty_state = empty_state,
         // After a wipe the tab URL still carries ?clear=1, which would wipe
@@ -673,17 +674,12 @@ fn history_request(uri: &str) -> (Option<String>, bool) {
 }
 
 /// Serve br0x://history from the local database.
-fn register_br0x_scheme(
-    context: &webkit6::WebContext,
-    history: Rc<RefCell<Option<History>>>,
-    prefs: Rc<RefCell<Prefs>>,
-) {
+fn register_br0x_scheme(context: &webkit6::WebContext, history: Rc<RefCell<Option<History>>>) {
     context.register_uri_scheme("br0x", move |request| {
         let uri = request.uri().map(|u| u.to_string()).unwrap_or_default();
         let (query, clear) = history_request(&uri);
-        let appearance = prefs.borrow().appearance;
         let html = match history.borrow_mut().as_mut() {
-            Some(h) => history_html(h, query.as_deref(), clear, appearance),
+            Some(h) => history_html(h, query.as_deref(), clear, crate::theme::current()),
             None => "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
                 <style>:root{color-scheme:light dark}body{font-family:system-ui,sans-serif;\
                 display:flex;min-height:100vh;align-items:center;justify-content:center;\
@@ -783,12 +779,12 @@ fn connect_downloads(session: &webkit6::NetworkSession, toasts: &adw::ToastOverl
 /// Write the start page file. A file keeps the page offline, instant, and
 /// user editable. False when the write failed, so the caller keeps the page
 /// marked stale and retries instead of serving the old one forever.
-fn write_newtab_page(engine: SearchEngine, frequent: &[Visit], appearance: Appearance) -> bool {
+fn write_newtab_page(engine: SearchEngine, frequent: &[Visit], scheme: theme::Scheme) -> bool {
     let path = newtab_path();
     if let Some(parent) = std::path::Path::new(&path).parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if std::fs::write(&path, newtab_html(engine, frequent, appearance)).is_err() {
+    if std::fs::write(&path, newtab_html(engine, frequent, scheme)).is_err() {
         eprintln!("br0x: could not write {path}");
         return false;
     }
@@ -799,14 +795,14 @@ fn write_newtab_page(engine: SearchEngine, frequent: &[Visit], appearance: Appea
 /// from. Frequent embeds live history, so the engine alone is not a safe
 /// key: titles and visit times shape the cards and order too.
 fn newtab_page_stale(
-    cached: Option<&(SearchEngine, Vec<Visit>, Appearance)>,
+    cached: Option<&(SearchEngine, Vec<Visit>, theme::Scheme)>,
     engine: SearchEngine,
     frequent: &[Visit],
-    appearance: Appearance,
+    scheme: theme::Scheme,
 ) -> bool {
     cached.is_none_or(|(cached_engine, cached_frequent, cached_appearance)| {
         *cached_engine != engine
-            || *cached_appearance != appearance
+            || *cached_appearance != scheme
             || cached_frequent.as_slice() != frequent
     })
 }
@@ -815,17 +811,17 @@ fn newtab_page_stale(
 /// either way. Repeats with an unchanged engine and history — every Ctrl+T —
 /// cost a comparison instead of a rewrite of the whole page.
 fn sync_newtab_page(
-    last: &RefCell<Option<(SearchEngine, Vec<Visit>, Appearance)>>,
+    last: &RefCell<Option<(SearchEngine, Vec<Visit>, theme::Scheme)>>,
     engine: SearchEngine,
     frequent: &[Visit],
-    appearance: Appearance,
+    scheme: theme::Scheme,
 ) -> String {
     let stale = {
         let cached = last.borrow();
-        newtab_page_stale(cached.as_ref(), engine, frequent, appearance)
+        newtab_page_stale(cached.as_ref(), engine, frequent, scheme)
     };
-    if stale && write_newtab_page(engine, frequent, appearance) {
-        last.replace(Some((engine, frequent.to_vec(), appearance)));
+    if stale && write_newtab_page(engine, frequent, scheme) {
+        last.replace(Some((engine, frequent.to_vec(), scheme)));
     }
     newtab_url()
 }
@@ -882,7 +878,7 @@ const SHORTCUTS: [(&str, &str, &str); 6] = [
     ("6", "Mail", "https://mail.google.com"),
 ];
 
-fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance) -> String {
+fn newtab_html(engine: SearchEngine, frequent: &[Visit], scheme: theme::Scheme) -> String {
     let (action, param) = engine.form();
     let items: String =
         SHORTCUTS.iter().map(|(key, name, url)| site_card(url, name, Some(key), "")).collect();
@@ -1507,7 +1503,7 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
 </body>
 </html>"#,
         engine_name = engine.name(),
-        scheme = scheme_token(appearance),
+        scheme = scheme.token(),
         empty_hint = empty_hint,
     )
 }
@@ -1817,35 +1813,36 @@ fn fuzzy_score(needle: &str, haystack: &str) -> Option<u32> {
     Some(score)
 }
 
-/// One palette row: a tab to switch to, a place to open, or an action.
+/// One palette row: a tab to switch to, a place to open, or an action. Every
+/// row carries an icon, so the list reads as controls instead of a word list.
 #[derive(Clone)]
 enum PaletteHit {
     Tab { title: String, url: String, page: adw::TabPage },
-    Go { title: String, url: String },
-    Action { label: String, hint: &'static str, action: &'static str },
+    Go { title: String, url: String, icon: &'static str },
+    Action { icon: &'static str, label: String, hint: &'static str, action: &'static str },
 }
 
 /// Every palette-runnable action: label, shortcut hint, win.* action name.
-const PALETTE_ACTIONS: &[(&str, &str, &str)] = &[
-    ("New Tab", "Ctrl+T", "new-tab"),
-    ("Reopen Closed Tab", "Ctrl+Shift+T", "reopen-tab"),
-    ("Focus Mode", "Ctrl+Shift+F", "focus-mode"),
-    ("Find in Page", "Ctrl+F", "find"),
-    ("Bookmark This Page", "Ctrl+D", "bookmark-page"),
-    ("Pin Tab", "Ctrl+Shift+P", "toggle-pin"),
-    ("Reader Mode", "Ctrl+Shift+R", "reader"),
-    ("Hide Element", "Ctrl+Shift+H", "curtain-pick"),
-    ("Ad Blocker for Site", "Ctrl+Shift+S", "toggle-shield"),
-    ("Toggle Sidebar", "F9", "toggle-sidebar"),
-    ("History", "Ctrl+H", "history"),
-    ("Copy URL", "", "copy-url"),
-    ("Go Back", "Alt+Left", "back"),
-    ("Go Forward", "Alt+Right", "forward"),
-    ("Reload", "Ctrl+R", "reload"),
-    ("Zoom In", "Ctrl++", "zoom-in"),
-    ("Zoom Out", "Ctrl+-", "zoom-out"),
-    ("Reset Zoom", "Ctrl+0", "zoom-reset"),
-    ("Settings", "Ctrl+,", "settings"),
+const PALETTE_ACTIONS: &[(&str, &str, &str, &str)] = &[
+    ("tab-new-symbolic", "New Tab", "Ctrl+T", "new-tab"),
+    ("edit-undo-symbolic", "Reopen Closed Tab", "Ctrl+Shift+T", "reopen-tab"),
+    ("view-fullscreen-symbolic", "Focus Mode", "Ctrl+Shift+F", "focus-mode"),
+    ("edit-find-symbolic", "Find in Page", "Ctrl+F", "find"),
+    ("star-new-symbolic", "Bookmark This Page", "Ctrl+D", "bookmark-page"),
+    ("view-pin-symbolic", "Pin Tab", "Ctrl+Shift+P", "toggle-pin"),
+    ("accessories-dictionary-symbolic", "Reader Mode", "Ctrl+Shift+R", "reader"),
+    ("view-conceal-symbolic", "Hide Element", "Ctrl+Shift+H", "curtain-pick"),
+    ("preferences-system-privacy-symbolic", "Ad Blocker for Site", "Ctrl+Shift+S", "toggle-shield"),
+    ("view-list-symbolic", "Toggle Sidebar", "F9", "toggle-sidebar"),
+    ("document-open-recent-symbolic", "History", "Ctrl+H", "history"),
+    ("edit-copy-symbolic", "Copy URL", "", "copy-url"),
+    ("go-previous-symbolic", "Go Back", "Alt+Left", "back"),
+    ("go-next-symbolic", "Go Forward", "Alt+Right", "forward"),
+    ("view-refresh-symbolic", "Reload", "Ctrl+R", "reload"),
+    ("zoom-in-symbolic", "Zoom In", "Ctrl++", "zoom-in"),
+    ("zoom-out-symbolic", "Zoom Out", "Ctrl+-", "zoom-out"),
+    ("zoom-original-symbolic", "Reset Zoom", "Ctrl+0", "zoom-reset"),
+    ("preferences-system-symbolic", "Settings", "Ctrl+,", "settings"),
 ];
 
 /// Most palette rows shown at once.
@@ -1966,9 +1963,9 @@ const READER_EXTRACT_TEMPLATE: &str = r##"(()=>{function textLen(n){return ((n.i
 
 /// Reader script with the current appearance baked in, so the article view
 /// matches the shell chrome instead of only following the OS.
-fn reader_extract_js(appearance: Appearance) -> String {
+fn reader_extract_js(scheme: theme::Scheme) -> String {
     READER_EXTRACT_TEMPLATE
-        .replace("color-scheme:light dark", &format!("color-scheme:{}", scheme_token(appearance)))
+        .replace("color-scheme:light dark", &format!("color-scheme:{}", scheme.token()))
 }
 
 /// Evaluate `script`, handing its string value (empty on failure) to `done`.
@@ -2033,7 +2030,7 @@ fn sync_entry_to_selection(tab_view: &adw::TabView, entry: &gtk4::Entry) {
 }
 
 /// Friendly inline page for failed loads and crashed processes.
-fn error_html(heading: &str, message: &str, uri: &str, appearance: Appearance) -> String {
+fn error_html(heading: &str, message: &str, uri: &str, scheme: theme::Scheme) -> String {
     format!(
         r#"<!doctype html>
 <html lang="en">
@@ -2056,7 +2053,7 @@ button {{ margin-top: 18px; padding: 10px 22px; border-radius: 9999px; border: 0
         heading = html_escape(heading),
         message = html_escape(message),
         uri = html_escape(uri),
-        scheme = scheme_token(appearance),
+        scheme = scheme.token(),
     )
 }
 /// Friendly leading icon: magnifier on empty pages, lock on https,
@@ -2155,7 +2152,7 @@ struct Shell {
     last_save: RefCell<Option<Instant>>,
     last_sample: RefCell<Option<(Instant, br0x_core::tab::SysState)>>,
     /// Engine, frequent list and scheme the start page file was last built from.
-    last_newtab: RefCell<Option<(SearchEngine, Vec<Visit>, Appearance)>>,
+    last_newtab: RefCell<Option<(SearchEngine, Vec<Visit>, theme::Scheme)>>,
     /// Address bar suggestion list, dismissed when the palette summons.
     suggest_pop: gtk4::Popover,
     sidebar_reveal: gtk4::Revealer,
@@ -2165,16 +2162,14 @@ struct Shell {
     sidebar_head_label: gtk4::Label,
     sidebar_collapse_btn: gtk4::Button,
     header_sidebar_btn: gtk4::Button,
-    /// Reloadable provider pinning chrome surfaces to the chosen scheme.
-    scheme_css: gtk4::CssProvider,
     toolbar: adw::ToolbarView,
     palette_card: gtk4::Box,
     palette_entry: gtk4::SearchEntry,
     palette_list: gtk4::ListBox,
     palette_store: RefCell<Vec<PaletteHit>>,
     /// Menu rows that name the current state instead of a fixed verb.
-    pin_item: gio::MenuItem,
-    shield_item: gio::MenuItem,
+    pin_label: gtk4::Label,
+    shield_label: gtk4::Label,
     /// Settings switches mirrored from outside (F9, rail button) so an
     /// open window never shows the opposite of the truth.
     settings_sidebar_row: RefCell<Option<adw::SwitchRow>>,
@@ -2275,8 +2270,8 @@ impl Shell {
     /// only when either changed since the last write. Returns its file URL.
     fn refresh_start_page(self: &Rc<Self>, engine: SearchEngine) -> String {
         let frequent = self.frequent_sites();
-        let appearance = self.prefs.borrow().appearance;
-        sync_newtab_page(&self.last_newtab, engine, &frequent, appearance)
+        let scheme = theme::current();
+        sync_newtab_page(&self.last_newtab, engine, &frequent, scheme)
     }
 
     fn add_tab(self: &Rc<Self>, url: &str, select: bool, load: bool, title: Option<&str>) {
@@ -2340,18 +2335,18 @@ impl Shell {
     /// off for the selected tab's site.
     fn refresh_menu_labels(&self) {
         let pinned = self.tab_view.selected_page().is_some_and(|p| p.is_pinned());
-        self.pin_item.set_label(Some(if pinned { "Unpin Tab" } else { "Pin Tab" }));
+        self.pin_label.set_text(if pinned { "Unpin Tab" } else { "Pin Tab" });
         let domain = selected_view(&self.tab_view)
             .and_then(|v| v.uri().map(|u| u.to_string()))
             .map(|uri| domain_of(&uri))
             .unwrap_or_default();
-        self.shield_item.set_label(Some(if domain.is_empty() {
+        self.shield_label.set_text(if domain.is_empty() {
             "Blocker for This Site"
         } else if self.blocker_active(&domain) {
             "Blocker On for This Site"
         } else {
             "Blocker Off for This Site"
-        }));
+        });
     }
 
     /// Star on/off for the current page. Internal pages cannot be saved.
@@ -2464,6 +2459,7 @@ impl Shell {
     fn palette_hits(&self, needle: &str) -> Vec<PaletteHit> {
         let query = needle.trim();
         let mut scored: Vec<(u32, u8, PaletteHit)> = Vec::new();
+        let tab_icon = "web-browser-symbolic";
         for (title, url, page) in self.all_tabs() {
             let name = if title.trim().is_empty() {
                 display_domain(&url).to_owned()
@@ -2472,15 +2468,16 @@ impl Shell {
             };
             if let Some(score) = fuzzy_score(query, &name).or_else(|| fuzzy_score(query, &url)) {
                 scored.push((score, 0, PaletteHit::Tab { title: name, url, page }));
+                let _ = tab_icon;
             }
         }
         if !query.is_empty() {
-            for (label, hint, action) in PALETTE_ACTIONS {
+            for (icon, label, hint, action) in PALETTE_ACTIONS {
                 if let Some(score) = fuzzy_score(query, label) {
                     scored.push((
                         score,
                         1,
-                        PaletteHit::Action { label: label.to_string(), hint, action },
+                        PaletteHit::Action { icon, label: label.to_string(), hint, action },
                     ));
                 }
             }
@@ -2494,7 +2491,15 @@ impl Shell {
                     if let Some(score) =
                         fuzzy_score(query, &name).or_else(|| fuzzy_score(query, &visit.url))
                     {
-                        scored.push((score, 2, PaletteHit::Go { title: name, url: visit.url }));
+                        scored.push((
+                            score,
+                            2,
+                            PaletteHit::Go {
+                                title: name,
+                                url: visit.url,
+                                icon: "document-open-recent-symbolic",
+                            },
+                        ));
                     }
                 }
             }
@@ -2507,7 +2512,15 @@ impl Shell {
                 if let Some(score) =
                     fuzzy_score(query, &name).or_else(|| fuzzy_score(query, &mark.url))
                 {
-                    scored.push((score, 2, PaletteHit::Go { title: name, url: mark.url.clone() }));
+                    scored.push((
+                        score,
+                        2,
+                        PaletteHit::Go {
+                            title: name,
+                            url: mark.url.clone(),
+                            icon: "user-bookmarks-symbolic",
+                        },
+                    ));
                 }
             }
         }
@@ -2521,6 +2534,7 @@ impl Shell {
             hits.push(PaletteHit::Go {
                 title: format!("Search {} for \"{}\"", engine.name(), needle.trim()),
                 url: search::resolve(needle, engine),
+                icon: "system-search-symbolic",
             });
         }
         hits
@@ -2532,16 +2546,26 @@ impl Shell {
         let hits = self.palette_hits(&query);
         self.palette_list.remove_all();
         for hit in &hits {
-            let (name, hint) = match hit {
-                PaletteHit::Tab { title, url, .. } => (title.clone(), format!("Open tab · {url}")),
-                PaletteHit::Go { title, url } => (title.clone(), url.clone()),
-                PaletteHit::Action { label, hint, .. } => (label.clone(), hint.to_string()),
+            let (icon, name, hint) = match hit {
+                PaletteHit::Tab { title, url, .. } => {
+                    ("web-browser-symbolic", title.clone(), format!("Open tab · {url}"))
+                }
+                PaletteHit::Go { title, url, icon } => (*icon, title.clone(), url.clone()),
+                PaletteHit::Action { icon, label, hint, .. } => {
+                    (*icon, label.clone(), hint.to_string())
+                }
             };
+            let row_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
+            row_box.set_margin_start(12);
+            let image = gtk4::Image::from_icon_name(icon);
+            image.set_pixel_size(16);
+            image.set_valign(gtk4::Align::Center);
             let stack = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
             stack.set_margin_top(5);
             stack.set_margin_bottom(5);
-            stack.set_margin_start(12);
+            stack.set_margin_start(2);
             stack.set_margin_end(12);
+            stack.set_hexpand(true);
             let title_label = gtk4::Label::new(Some(&name));
             title_label.set_xalign(0.0);
             title_label.set_hexpand(true);
@@ -2555,12 +2579,14 @@ impl Shell {
             hint_label.add_css_class("dim-label");
             stack.append(&title_label);
             stack.append(&hint_label);
+            row_box.append(&image);
+            row_box.append(&stack);
             let row = gtk4::ListBoxRow::new();
             // Rows never take focus: clicks must not move it out of the
             // entry, or the focus-leave dismiss wins the race against
             // activation. Arrows still move the selection.
             row.set_focusable(false);
-            row.set_child(Some(&stack));
+            row.set_child(Some(&row_box));
             self.palette_list.append(&row);
         }
         *self.palette_store.borrow_mut() = hits;
@@ -2842,7 +2868,7 @@ impl Shell {
         let page = self.tab_view.selected_page();
         let shell = self.clone();
         let eval_view = view.clone();
-        let script = reader_extract_js(self.prefs.borrow().appearance);
+        let script = reader_extract_js(theme::current());
         eval_text(&eval_view, &script, move |html| {
             if html.is_empty() {
                 shell.toasts.add_toast(adw::Toast::new("No article found on this page"));
@@ -3097,9 +3123,9 @@ impl Shell {
         let rail = *self.sidebar_rail.borrow();
         self.sidebar_head_label.set_visible(!rail);
         self.sidebar_collapse_btn.set_icon_name(if rail {
-            "sidebar-show-symbolic"
+            "pan-end-symbolic"
         } else {
-            "sidebar-hide-symbolic"
+            "pan-start-symbolic"
         });
         self.sidebar_collapse_btn.set_tooltip_text(Some(if rail {
             "Expand sidebar"
@@ -3113,21 +3139,13 @@ impl Shell {
     /// or change the row metrics, so badges and dots never shift the layout.
     fn sidebar_row(&self, item: &SidebarItem, tab_view: &adw::TabView) -> gtk4::ListBoxRow {
         let rail = *self.sidebar_rail.borrow();
-        let slot = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
-        slot.set_margin_top(3);
-        slot.set_margin_bottom(3);
-        slot.set_margin_start(8);
-        slot.set_margin_end(8);
-        // Fixed-width unread marker instead of a text prefix: the title
-        // never shifts and long titles cannot ellipsize the dot away. The
-        // marker stays allocated and fades, since hiding it would drop it
-        // from layout and jump every title sideways on arrival.
-        let dot = gtk4::Label::new(Some("•"));
-        dot.set_size_request(10, -1);
-        dot.set_valign(gtk4::Align::Center);
-        dot.add_css_class("sidebar-dot");
-        dot.set_opacity(if item.attention && !rail { 1.0 } else { 0.0 });
-        slot.append(&dot);
+        let slot = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+        slot.set_margin_top(6);
+        slot.set_margin_bottom(6);
+        slot.set_margin_start(12);
+        slot.set_margin_end(6);
+        // Attention rides on the favicon as a corner dot: the title never
+        // shifts, and no gutter is reserved when nothing is unread.
         let icon = item
             .page
             .icon()
@@ -3137,7 +3155,18 @@ impl Shell {
         icon.set_pixel_size(16);
         icon.set_valign(gtk4::Align::Center);
         icon.add_css_class("favicon");
-        slot.append(&icon);
+        if item.attention && !rail {
+            let dot = gtk4::Label::new(Some("•"));
+            dot.add_css_class("sidebar-dot");
+            dot.set_halign(gtk4::Align::End);
+            dot.set_valign(gtk4::Align::Start);
+            let badge = gtk4::Overlay::new();
+            badge.set_child(Some(&icon));
+            badge.add_overlay(&dot);
+            slot.append(&badge);
+        } else {
+            slot.append(&icon);
+        }
         // Rail rows carry no close button at all.
         let mut close_btn: Option<gtk4::Button> = None;
         if !rail {
@@ -3147,7 +3176,7 @@ impl Shell {
             title.set_text(&name);
             title.set_xalign(0.0);
             title.set_hexpand(true);
-            title.set_max_width_chars(28);
+            title.set_max_width_chars(34);
             title.set_ellipsize(gtk4::pango::EllipsizeMode::End);
             title.set_valign(gtk4::Align::Center);
             slot.append(&title);
@@ -3173,7 +3202,8 @@ impl Shell {
             close.add_css_class("flat");
             close.add_css_class("close-btn");
             close.set_valign(gtk4::Align::Center);
-            close.set_visible(false);
+            close.set_opacity(0.0);
+            close.set_can_target(false);
             let page = item.page.clone();
             let tv = tab_view.clone();
             close.connect_clicked(move |_| {
@@ -3192,12 +3222,14 @@ impl Shell {
             let motion = gtk4::EventControllerMotion::new();
             motion.connect_enter(move |_, _, _| {
                 if let Some(c) = show.upgrade() {
-                    c.set_visible(true);
+                    c.set_opacity(1.0);
+                    c.set_can_target(true);
                 }
             });
             motion.connect_leave(move |_| {
                 if let Some(c) = hide.upgrade() {
-                    c.set_visible(false);
+                    c.set_opacity(0.0);
+                    c.set_can_target(false);
                 }
             });
             row.add_controller(motion);
@@ -3206,12 +3238,14 @@ impl Shell {
             let focus = gtk4::EventControllerFocus::new();
             focus.connect_enter(move |_| {
                 if let Some(c) = focus_show.upgrade() {
-                    c.set_visible(true);
+                    c.set_opacity(1.0);
+                    c.set_can_target(true);
                 }
             });
             focus.connect_leave(move |_| {
                 if let Some(c) = focus_hide.upgrade() {
-                    c.set_visible(false);
+                    c.set_opacity(0.0);
+                    c.set_can_target(false);
                 }
             });
             row.add_controller(focus);
@@ -3275,11 +3309,7 @@ impl Shell {
     /// about the persisted state (including across restarts).
     fn sync_header_sidebar_btn(&self) {
         let visible = *self.sidebar_visible.borrow();
-        self.header_sidebar_btn.set_icon_name(if visible {
-            "sidebar-hide-symbolic"
-        } else {
-            "sidebar-show-symbolic"
-        });
+        self.header_sidebar_btn.set_icon_name("sidebar-show-symbolic");
         self.header_sidebar_btn.set_tooltip_text(Some(if visible {
             "Hide tab sidebar (F9)"
         } else {
@@ -3298,7 +3328,7 @@ impl Shell {
         *self.sidebar_rail.borrow_mut() = rail;
         self.prefs.borrow_mut().sidebar_collapsed = rail;
         self.save_prefs();
-        self.sidebar_box.set_size_request(if rail { 52 } else { 220 }, -1);
+        self.sidebar_box.set_size_request(if rail { 56 } else { 260 }, -1);
         if let Some(row) = self.settings_rail_row.borrow().as_ref() {
             row.set_active(rail);
         }
@@ -3328,8 +3358,8 @@ impl Shell {
     fn set_appearance(self: &Rc<Self>, appearance: Appearance) {
         self.prefs.borrow_mut().appearance = appearance;
         self.save_prefs();
-        self.scheme_css.load_from_string(&scheme_chrome_css(appearance));
-        let verified = apply_appearance(appearance);
+        let applied = theme::apply(appearance);
+        let verified = applied == theme::wanted(appearance);
         let engine = self.prefs.borrow().engine;
         self.refresh_start_page(engine);
         self.reload_start_pages();
@@ -3404,7 +3434,10 @@ impl Shell {
         // The start page names the engine and posts to its form.
         self.refresh_start_page(engine);
         self.reload_start_pages();
-        self.engine_btn.set_label(engine.name());
+        self.engine_btn.set_tooltip_text(Some(&format!(
+            "Search engine: {} (address bar + start page)",
+            engine.name()
+        )));
         self.toasts.add_toast(adw::Toast::new(&format!("Search engine: {}", engine.name())));
     }
 
@@ -3582,7 +3615,6 @@ impl Shell {
             let page_clone = page.clone();
             let reload_clone = self.reload.clone();
             let toasts_failed = self.toasts.clone();
-            let prefs_failed = self.prefs.clone();
             view.connect_load_failed(move |v, _, uri, err| {
                 eprintln!("br0x: load failed {uri}: {err}");
                 if page_clone.is_selected() {
@@ -3600,7 +3632,7 @@ impl Shell {
                             "Could not open this page",
                             "Check the address and your connection, then try again.",
                             uri,
-                            prefs_failed.borrow().appearance,
+                            theme::current(),
                         ),
                         uri,
                         None,
@@ -3611,7 +3643,6 @@ impl Shell {
             });
         }
         let toasts_crashed = self.toasts.clone();
-        let prefs_crashed = self.prefs.clone();
         view.connect_web_process_terminated(move |v, reason| {
             eprintln!("br0x: web process terminated: {reason:?}");
             // Parking terminates the process on purpose; only crashes and OOM
@@ -3624,7 +3655,7 @@ impl Shell {
                         "This page crashed",
                         "The page used too much memory or hit a bug. Your other tabs are safe.",
                         &uri,
-                        prefs_crashed.borrow().appearance,
+                        theme::current(),
                     ),
                     &uri,
                     None,
@@ -4785,232 +4816,15 @@ impl Shell {
     }
 }
 
-/// Apply the appearance pref to the whole shell chrome at once. The style
-/// manager switch is synchronous, so there is no flicker between themes.
-/// Returns whether the toolkit variant matches the request: libadwaita
-/// silently ignores the call when GTK_THEME is set (cleared process-locally
-/// in main) or a user gtk.css forces a variant, so callers must surface a
-/// mismatch instead of failing quietly.
-fn apply_appearance(appearance: Appearance) -> bool {
-    let manager = adw::StyleManager::default();
-    manager.set_color_scheme(match appearance {
-        Appearance::System => adw::ColorScheme::Default,
-        Appearance::Light => adw::ColorScheme::ForceLight,
-        Appearance::Dark => adw::ColorScheme::ForceDark,
-    });
-    let want_dark = match appearance {
-        Appearance::System => manager.system_supports_color_schemes() && manager.is_dark(),
-        Appearance::Light => false,
-        Appearance::Dark => true,
-    };
-    let verified = manager.is_dark() == want_dark;
-    if !verified {
-        eprintln!("br0x: appearance switch unverified (want dark={want_dark})");
-    }
-    verified
-}
-
-/// Chrome surfaces pinned to the chosen scheme, independent of the toolkit
-/// variant. Light stays light even when the style manager fails to flip
-/// (launcher GTK_THEME, user gtk.css): the header bar, sidebar, window,
-/// and omnibox carry explicit colors instead of inheriting a stuck variant.
-/// System pins nothing and follows the OS.
-fn scheme_chrome_css(appearance: Appearance) -> String {
-    match appearance {
-        Appearance::System => String::new(),
-        Appearance::Light => String::from(
-            r#"
-            window.br0x-window { background-color: #fafafa; color: #2e2e2e; }
-            headerbar, .top-bar { background-color: #ffffff; color: #2e2e2e; }
-            .br0x-sidebar { background-color: #f4f4f4; color: #2e2e2e; }
-            .omnibox-frame {
-                background-color: #ffffff;
-                border-color: color-mix(in srgb, currentColor 28%, transparent);
-            }
-            "#,
-        ),
-        Appearance::Dark => String::from(
-            r#"
-            window.br0x-window { background-color: #242424; color: #eeeeec; }
-            headerbar, .top-bar { background-color: #242424; color: #eeeeec; }
-            .br0x-sidebar { background-color: #1e1e1e; color: #eeeeec; }
-            .omnibox-frame {
-                background-color: #2d2d2d;
-                border-color: color-mix(in srgb, currentColor 28%, transparent);
-            }
-            "#,
-        ),
-    }
-}
-
-/// CSS `color-scheme` token for internal pages (start, history, error,
-/// reader), so they match the chrome instead of only following the OS.
-fn scheme_token(appearance: Appearance) -> &'static str {
-    match appearance {
-        Appearance::System => "light dark",
-        Appearance::Light => "light",
-        Appearance::Dark => "dark",
-    }
-}
-
 /// Memory posture, reported in the settings About page and on stdout.
 const MEMORY_REPORT: &str = "1 shared WebContext + 1 shared NetworkSession for all tabs and popouts; \
     content filter compiled once and shared; cache model DocumentViewer (no memory cache); \
     WebKit pressure: kill 0.95 / strict 0.7 / conservative 0.5 / 1024 MB limit / 5 s poll; \
     no web-process-model API in the webkit6 bindings, so the shared context is the whole story";
 
-/// Calm chrome that follows the chosen theme, with a soft omnibox.
-fn install_theme() {
-    let provider = gtk4::CssProvider::new();
-    provider.load_from_string(
-        r#"
-        .omnibox-frame {
-            border-radius: 20px;
-            padding: 2px 8px 2px 6px;
-            min-height: 40px;
-            min-width: 220px;
-            background-color: var(--view-bg-color, @view_bg_color);
-            border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
-            box-shadow: 0 1px 2px color-mix(in srgb, currentColor 6%, transparent);
-        }
-
-        .omnibox-frame:focus-within {
-            border-color: color-mix(in srgb, var(--accent-color, @accent_bg_color) 60%, transparent);
-            box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color, @accent_bg_color) 20%, transparent);
-        }
-
-        .omnibox-frame entry {
-            background: transparent;
-            outline: none;
-        }
-
-        /* Single calm ring lives on the frame; the inner entry never
-        draws its own focus outline (the doubled rectangle in bug reports). */
-        .omnibox-frame entry:focus {
-            outline: none;
-            border: none;
-            box-shadow: none;
-        }
-
-        .omnibox-frame entry image.left {
-            opacity: 0.75;
-        }
-
-        .omnibox-frame menubutton button {
-            border-radius: 9999px;
-            padding: 4px 10px;
-            font-size: 12px;
-            font-weight: 600;
-            background: color-mix(in srgb, currentColor 8%, transparent);
-        }
-
-        .omnibox-frame menubutton button:hover {
-            background: color-mix(in srgb, currentColor 13%, transparent);
-        }
-
-        headerbar button.flat {
-            border-radius: 9999px;
-        }
-
-        tabbar tab:selected {
-            font-weight: 600;
-        }
-
-        .hairline-progress {
-            min-height: 2px;
-            padding: 0;
-            margin: 0;
-            border: none;
-        }
-
-        .hairline-progress trough {
-            min-height: 2px;
-            background: transparent;
-            border: none;
-            border-radius: 0;
-        }
-
-        .hairline-progress progress {
-            min-height: 2px;
-            background-color: var(--accent-color, @accent_bg_color);
-            border: none;
-            border-radius: 0;
-        }
-
-        /* Reading progress shares the hairline shape but whispers: a dim
-        currentColor wash next to the accent load bar. */
-        .hairline-dim progress {
-            background-color: color-mix(in srgb, currentColor 35%, transparent);
-        }
-
-        .sidebar-row {
-            border-radius: 10px;
-            margin: 2px 0;
-        }
-
-        .sidebar-row-active {
-            background: color-mix(in srgb, var(--accent-color, @accent_bg_color) 16%, transparent);
-        }
-
-        .sidebar-row-active:hover {
-            background: color-mix(in srgb, var(--accent-color, @accent_bg_color) 24%, transparent);
-        }
-
-        /* Selected pinned tabs share the row selection language instead of
-        a filled accent button. */
-        .sidebar-pin-active {
-            background: color-mix(in srgb, var(--accent-color, @accent_bg_color) 16%, transparent);
-            border-radius: 10px;
-        }
-
-        .sidebar-badge {
-            font-size: 11px;
-            opacity: 0.85;
-        }
-
-        .sidebar-dot {
-            color: var(--accent-color, @accent_bg_color);
-            font-size: 11px;
-        }
-
-        /* Close-button visibility is driven from sidebar_row on hover and
-        focus: GTK CSS has no visibility property, and opacity alone
-        would leave an invisible close target on the row edge. */
-
-        @keyframes sidebar-shimmer {
-            from { opacity: 0.45; }
-            to { opacity: 1.0; }
-        }
-
-        .sidebar-loading image.favicon {
-            animation: sidebar-shimmer 700ms ease-in-out infinite alternate;
-        }
-
-        /* One motion language: quick hovers, calm reveals. */
-        .sidebar-row,
-        headerbar button,
-        .omnibox-frame {
-            transition: background-color 200ms cubic-bezier(0.32, 0.72, 0, 1),
-                border-color 200ms cubic-bezier(0.32, 0.72, 0, 1),
-                box-shadow 200ms cubic-bezier(0.32, 0.72, 0, 1);
-        }
-
-        .palette-card {
-            background-color: var(--view-bg-color, @view_bg_color);
-            border-radius: 16px;
-            border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
-            box-shadow: 0 12px 40px color-mix(in srgb, currentColor 22%, transparent);
-            padding-bottom: 8px;
-        }
-        "#,
-    );
-    if let Some(display) = gtk4::gdk::Display::default() {
-        gtk4::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
-    }
+/// Register the shell stylesheet. All chrome color lives in `theme`.
+fn install_theme(display: &gtk4::gdk::Display) {
+    theme::install(display);
 }
 
 fn build_ui(app: &adw::Application) {
@@ -5018,10 +4832,11 @@ fn build_ui(app: &adw::Application) {
     let prefs = Rc::new(RefCell::new(prefs_store.load()));
     // Handed to the shell below, so its startup write can skip this page
     // when the engine, history and scheme still match what was written here.
-    let last_newtab: RefCell<Option<(SearchEngine, Vec<Visit>, Appearance)>> = RefCell::new(None);
+    let last_newtab: RefCell<Option<(SearchEngine, Vec<Visit>, theme::Scheme)>> =
+        RefCell::new(None);
     {
         let loaded = prefs.borrow();
-        sync_newtab_page(&last_newtab, loaded.engine, &[], loaded.appearance);
+        sync_newtab_page(&last_newtab, loaded.engine, &[], theme::current());
     }
 
     let session = shared_session();
@@ -5034,8 +4849,10 @@ fn build_ui(app: &adw::Application) {
         .build();
     window.add_css_class("br0x-window");
 
-    install_theme();
-    apply_appearance(prefs.borrow().appearance);
+    if let Some(display) = gtk4::gdk::Display::default() {
+        install_theme(&display);
+    }
+    theme::apply(prefs.borrow().appearance);
     eprintln!("br0x: memory: {MEMORY_REPORT}");
 
     let tab_view = adw::TabView::new();
@@ -5046,6 +4863,7 @@ fn build_ui(app: &adw::Application) {
     // Tabs hug their content instead of stretching across the window.
     tab_bar.set_expand_tabs(false);
     tab_bar.set_autohide(false);
+    tab_bar.add_css_class("br0x-tabbar");
 
     let back = gtk4::Button::from_icon_name("go-previous-symbolic");
     back.set_tooltip_text(Some("Back (Alt+Left)"));
@@ -5086,11 +4904,17 @@ fn build_ui(app: &adw::Application) {
     key_btn.set_tooltip_text(Some("Logins for this site"));
     key_btn.add_css_class("flat");
     key_btn.set_visible(false);
+    if let Some(icon) = key_btn.child().and_downcast::<gtk4::Image>() {
+        icon.set_pixel_size(16);
+    }
 
     // Star button for the current page, kept in sync on every switch.
     let star_btn = gtk4::Button::from_icon_name("non-starred-symbolic");
     star_btn.set_tooltip_text(Some("Bookmark this page (Ctrl+D)"));
     star_btn.add_css_class("flat");
+    if let Some(icon) = star_btn.child().and_downcast::<gtk4::Image>() {
+        icon.set_pixel_size(16);
+    }
 
     /// One shared engine menu: the address-bar picker and the hamburger
     /// submenu show the same items, so they can never disagree.
@@ -5117,66 +4941,109 @@ fn build_ui(app: &adw::Application) {
     let omnibox_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
     omnibox_box.add_css_class("omnibox-frame");
     omnibox_box.set_hexpand(true);
-    omnibox_box.set_size_request(-1, 40);
     // The bar keeps a single address field, the bookmark star, the engine
     // picker badge, and the contextual key icon (hidden unless the page
     // has a login form). Everything else lives in the hamburger menu.
     omnibox_box.append(&entry);
     omnibox_box.append(&star_btn);
     let engine_btn = gtk4::MenuButton::new();
-    engine_btn.set_label(prefs.borrow().engine.name());
+    engine_btn.set_icon_name("system-search-symbolic");
     engine_btn.set_tooltip_text(Some("Search engine (address bar + start page)"));
+    engine_btn.add_css_class("engine-picker");
     engine_btn.set_popover(Some(&gtk4::PopoverMenu::from_model(Some(&engine_menu_model()))));
     omnibox_box.append(&engine_btn);
     omnibox_box.append(&key_btn);
 
-    // Grouped hamburger menu: tabs, find, zoom, engine, page tools,
-    // session, view, settings. Quit stands alone at the end.
-    let menu = gio::Menu::new();
-    let tabs = gio::Menu::new();
-    tabs.append(Some("New Tab"), Some("win.new-tab"));
-    tabs.append(Some("Reopen Closed Tab"), Some("win.reopen-tab"));
-    tabs.append(Some("Close Tab"), Some("win.close-tab"));
-    let pin_item = gio::MenuItem::new(Some("Pin Tab"), Some("win.toggle-pin"));
-    tabs.append_item(&pin_item);
-    tabs.append(Some("Move Tab Up"), Some("win.move-tab-up"));
-    tabs.append(Some("Move Tab Down"), Some("win.move-tab-down"));
-    menu.append_section(None, &tabs);
-    let find = gio::Menu::new();
-    find.append(Some("Find in Page"), Some("win.find"));
-    find.append(Some("Command Palette"), Some("win.palette"));
-    menu.append_section(None, &find);
-    let zoom = gio::Menu::new();
-    zoom.append(Some("Zoom In"), Some("win.zoom-in"));
-    zoom.append(Some("Zoom Out"), Some("win.zoom-out"));
-    zoom.append(Some("Reset Zoom"), Some("win.zoom-reset"));
-    menu.append_section(None, &zoom);
-    menu.append_submenu(Some("Search Engine"), &engine_menu_model());
-    let page = gio::Menu::new();
-    page.append(Some("Bookmark This Page"), Some("win.bookmark-page"));
-    page.append(Some("Bookmarks…"), Some("win.show-bookmarks"));
-    page.append(Some("Copy Address"), Some("win.copy-url"));
-    let shield_item = gio::MenuItem::new(Some("Blocker for This Site"), Some("win.toggle-shield"));
-    page.append_item(&shield_item);
-    page.append(Some("Reader Mode"), Some("win.reader"));
-    page.append(Some("Pop Out Video"), Some("win.popout"));
-    page.append(Some("Hide Element on Site"), Some("win.curtain-pick"));
-    page.append(Some("Unhide All on Site"), Some("win.curtain-clear"));
-    menu.append_section(None, &page);
-    let history_menu = gio::Menu::new();
-    history_menu.append(Some("History"), Some("win.history"));
-    history_menu.append(Some("Restore Previous Session"), Some("win.restore-prev"));
-    history_menu.append(Some("Restore Tabs on Startup"), Some("win.restore-session"));
-    menu.append_section(None, &history_menu);
-    let view = gio::Menu::new();
-    view.append(Some("Sidebar"), Some("win.toggle-sidebar"));
-    view.append(Some("Focus Mode"), Some("win.focus-mode"));
-    menu.append_section(None, &view);
-    menu.append(Some("Settings…"), Some("win.settings"));
-    menu.append(Some("Quit"), Some("win.quit"));
+    // Hamburger menu. A custom popover, not a gio::Menu: GTK hides images
+    // on modelled menu items, so icons require real rows. Every row is a
+    // flat button holding an icon, a label, and its shortcut.
+    let menu_pop = gtk4::Popover::new();
+    menu_pop.add_css_class("menu-popover");
+    let menu_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    menu_box.set_margin_top(6);
+    menu_box.set_margin_bottom(6);
+    menu_box.set_margin_start(6);
+    menu_box.set_margin_end(6);
+    // A menu taller than the window cannot be shown at all, so it scrolls.
+    let menu_scroll = gtk4::ScrolledWindow::new();
+    menu_scroll.set_child(Some(&menu_box));
+    menu_scroll.set_propagate_natural_height(true);
+    menu_scroll.set_max_content_height(560);
+    menu_scroll.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
+    menu_pop.set_child(Some(&menu_scroll));
+
+    let row_for = |icon: &str, label: &str, accel: &str, action: &str| {
+        let row = gtk4::Button::new();
+        row.add_css_class("menu-row");
+        let line = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
+        let image = gtk4::Image::from_icon_name(icon);
+        image.set_pixel_size(16);
+        let text = gtk4::Label::new(Some(label));
+        text.set_xalign(0.0);
+        text.set_hexpand(true);
+        line.append(&image);
+        line.append(&text);
+        if !accel.is_empty() {
+            let hint = gtk4::Label::new(Some(accel));
+            hint.add_css_class("menu-accel");
+            hint.set_xalign(1.0);
+            line.append(&hint);
+        }
+        row.set_child(Some(&line));
+        let win = window.clone();
+        let pop = menu_pop.clone();
+        let action = action.to_string();
+        row.connect_clicked(move |_| {
+            pop.popdown();
+            gio::prelude::ActionGroupExt::activate_action(&win, &action, None);
+        });
+        menu_box.append(&row);
+        (row, text)
+    };
+
+    let section_break = || {
+        let sep = gtk4::Separator::new(gtk4::Orientation::Horizontal);
+        sep.add_css_class("menu-sep");
+        menu_box.append(&sep);
+    };
+
+    row_for("tab-new-symbolic", "New Tab", "Ctrl+T", "new-tab");
+    row_for("edit-undo-symbolic", "Reopen Closed Tab", "Ctrl+Shift+T", "reopen-tab");
+    row_for("window-close-symbolic", "Close Tab", "Ctrl+W", "close-tab");
+    let (_, pin_label) = row_for("view-pin-symbolic", "Pin Tab", "Ctrl+Shift+P", "toggle-pin");
+    section_break();
+    row_for("edit-find-symbolic", "Find in Page", "Ctrl+F", "find");
+    row_for("view-app-grid-symbolic", "Command Palette", "Ctrl+K", "palette");
+    row_for("zoom-in-symbolic", "Zoom In", "Ctrl++", "zoom-in");
+    row_for("zoom-out-symbolic", "Zoom Out", "Ctrl+-", "zoom-out");
+    row_for("zoom-original-symbolic", "Reset Zoom", "Ctrl+0", "zoom-reset");
+    section_break();
+    row_for("star-new-symbolic", "Bookmark This Page", "Ctrl+D", "bookmark-page");
+    row_for("user-bookmarks-symbolic", "Bookmarks…", "", "show-bookmarks");
+    let (_, shield_label) = row_for(
+        "preferences-system-privacy-symbolic",
+        "Blocker for This Site",
+        "Ctrl+Shift+S",
+        "toggle-shield",
+    );
+    row_for("accessories-dictionary-symbolic", "Reader Mode", "Ctrl+Shift+R", "reader");
+    row_for("video-display-symbolic", "Pop Out Video", "Ctrl+Shift+O", "popout");
+    row_for("view-conceal-symbolic", "Hide Element on Site", "Ctrl+Shift+H", "curtain-pick");
+    row_for("view-reveal-symbolic", "Unhide All on Site", "", "curtain-clear");
+    section_break();
+    row_for("document-open-recent-symbolic", "History", "Ctrl+H", "history");
+    row_for("document-revert-symbolic", "Restore Previous Session", "", "restore-prev");
+    row_for("view-restore-symbolic", "Restore Tabs on Startup", "", "restore-session");
+    section_break();
+    section_break();
+    row_for("view-list-symbolic", "Sidebar", "F9", "toggle-sidebar");
+    row_for("view-fullscreen-symbolic", "Focus Mode", "Ctrl+Shift+F", "focus-mode");
+    row_for("preferences-system-symbolic", "Settings…", "Ctrl+,", "settings");
+    row_for("application-exit-symbolic", "Quit", "Ctrl+Q", "quit");
+
     let menu_btn = gtk4::MenuButton::builder()
         .icon_name("open-menu-symbolic")
-        .menu_model(&menu)
+        .popover(&menu_pop)
         .tooltip_text("Menu")
         .build();
 
@@ -5207,17 +5074,20 @@ fn build_ui(app: &adw::Application) {
     // either way. Pinned tabs get their own icon row above the list.
     let sidebar_label = gtk4::Label::new(Some("Tabs"));
     sidebar_label.set_xalign(0.0);
-    let sidebar_collapse = gtk4::Button::from_icon_name("sidebar-hide-symbolic");
+    sidebar_label.add_css_class("br0x-sidebar-title");
+    let sidebar_collapse = gtk4::Button::from_icon_name("pan-start-symbolic");
     sidebar_collapse.set_tooltip_text(Some("Collapse sidebar to icons"));
     sidebar_collapse.add_css_class("flat");
+    sidebar_collapse.set_size_request(28, 28);
     // CenterBox, not Box: a plain box ORs its children's expand flags, which
     // leaked expansion into the revealer and stretched the sidebar to half
     // the window. CenterBox never computes expand, so the child's 220 px
     // request above is a real width, not a floor.
     let sidebar_head = gtk4::CenterBox::new();
+    sidebar_head.add_css_class("br0x-sidebar-head");
     sidebar_head.set_margin_top(6);
     sidebar_head.set_margin_bottom(6);
-    sidebar_head.set_margin_start(8);
+    sidebar_head.set_margin_start(12);
     sidebar_head.set_margin_end(8);
     sidebar_head.set_start_widget(Some(&sidebar_label));
     sidebar_head.set_end_widget(Some(&sidebar_collapse));
@@ -5241,7 +5111,7 @@ fn build_ui(app: &adw::Application) {
     sidebar_box.add_css_class("br0x-sidebar");
     // Width lives on the revealer's child: a request on the revealer itself
     // is a hard minimum even while hidden, permanently stealing 220 px.
-    sidebar_box.set_size_request(220, -1);
+    sidebar_box.set_size_request(260, -1);
     sidebar_box.append(&sidebar_head);
     sidebar_box.append(&sidebar_pins);
     sidebar_box.append(&sidebar_scroll);
@@ -5252,9 +5122,6 @@ fn build_ui(app: &adw::Application) {
     sidebar_reveal.set_reveal_child(false);
     tab_view.set_hexpand(true);
     tab_view.set_vexpand(true);
-    let content_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
-    content_box.append(&sidebar_reveal);
-    content_box.append(&tab_view);
 
     // Find in page bar, revealed with Ctrl+F.
     let find_entry = gtk4::SearchEntry::new();
@@ -5304,16 +5171,23 @@ fn build_ui(app: &adw::Application) {
     let toolbar = adw::ToolbarView::new();
     toolbar.add_top_bar(&header);
     toolbar.add_top_bar(&tab_bar);
-    toolbar.add_top_bar(&read_progress);
-    toolbar.add_top_bar(&progress);
+    let hairlines = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    hairlines.append(&read_progress);
+    hairlines.append(&progress);
+    toolbar.add_top_bar(&hairlines);
     toolbar.add_top_bar(&find_bar);
     let content_overlay = gtk4::Overlay::new();
-    content_overlay.set_child(Some(&content_box));
+    content_overlay.set_child(Some(&tab_view));
     content_overlay.add_overlay(&palette_card);
     toolbar.set_content(Some(&content_overlay));
 
+    // Sidebar beside the page column, not inside it: the tab strip would
+    // otherwise run across the top of the sidebar and cut its height.
+    let root = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+    root.append(&sidebar_reveal);
+    root.append(&toolbar);
     let toasts = adw::ToastOverlay::new();
-    toasts.set_child(Some(&toolbar));
+    toasts.set_child(Some(&root));
     window.set_content(Some(&toasts));
 
     // Window-wide suggestion dismissal: the list keeps autohide off so
@@ -5340,22 +5214,11 @@ fn build_ui(app: &adw::Application) {
     // history page simply see an empty store until the database is ready,
     // instead of blocking the window on SQLite.
     let history: Rc<RefCell<Option<History>>> = Rc::new(RefCell::new(None));
-    register_br0x_scheme(&context, history.clone(), prefs.clone());
+    register_br0x_scheme(&context, history.clone());
     connect_downloads(&session, &toasts);
 
     let bookmarks_store = BookmarkStore::new(bookmarks_path());
     let bookmarks = Rc::new(RefCell::new(bookmarks_store.load()));
-
-    // Scheme-pinned chrome loads after the generic theme so it wins ties.
-    let scheme_css = gtk4::CssProvider::new();
-    if let Some(display) = gtk4::gdk::Display::default() {
-        gtk4::style_context_add_provider_for_display(
-            &display,
-            &scheme_css,
-            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
-        );
-    }
-    scheme_css.load_from_string(&scheme_chrome_css(prefs.borrow().appearance));
 
     let shell = Rc::new(Shell {
         tab_view: tab_view.clone(),
@@ -5386,14 +5249,13 @@ fn build_ui(app: &adw::Application) {
         sidebar_head_label: sidebar_label.clone(),
         sidebar_collapse_btn: sidebar_collapse.clone(),
         header_sidebar_btn: sidebar_btn.clone(),
-        scheme_css: scheme_css.clone(),
         toolbar: toolbar.clone(),
         palette_card: palette_card.clone(),
         palette_entry: palette_entry.clone(),
         palette_list: palette_list.clone(),
         palette_store: RefCell::new(Vec::new()),
-        pin_item: pin_item.clone(),
-        shield_item: shield_item.clone(),
+        pin_label: pin_label.clone(),
+        shield_label: shield_label.clone(),
         settings_sidebar_row: RefCell::new(None),
         settings_rail_row: RefCell::new(None),
         sidebar_pages: RefCell::new(Vec::new()),
@@ -5419,7 +5281,7 @@ fn build_ui(app: &adw::Application) {
         tabs: Rc::new(RefCell::new(Tabs::new())),
     });
     // Restore the persisted sidebar shape before first paint.
-    shell.sidebar_box.set_size_request(if *shell.sidebar_rail.borrow() { 52 } else { 220 }, -1);
+    shell.sidebar_box.set_size_request(if *shell.sidebar_rail.borrow() { 56 } else { 260 }, -1);
     shell.sidebar_reveal.set_reveal_child(*shell.sidebar_visible.borrow());
     shell.sync_header_sidebar_btn();
 
@@ -5944,6 +5806,123 @@ fn build_ui(app: &adw::Application) {
         v.grab_focus();
     }
     window.present();
+
+    // Dev lever, not product surface: BR0X_SHOT=<path> renders the window to
+    // a PNG after first paint and exits. It is the only way to review chrome
+    // on a headless box, so UI changes ship with before/after captures from
+    // it. Optional BR0X_SHOT_DELAY_MS tunes how long the window settles
+    // (default 1200 ms, enough for fonts, revealers, and the first frame).
+    if let Some(path) = std::env::var_os("BR0X_SHOT") {
+        let path = path.to_string_lossy().to_string();
+        let delay = std::env::var("BR0X_SHOT_DELAY_MS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(1200);
+        // BR0X_SHOT_OPEN opens a transient surface first. A popover draws on
+        // its own surface, so it never appears in a window snapshot: the
+        // capture target becomes the popover's content instead.
+        let open = std::env::var("BR0X_SHOT_OPEN").unwrap_or_default();
+        let menu_btn = menu_btn.clone();
+        let menu_body = menu_scroll.clone();
+        let card = palette_card.clone();
+        let shell_for_shot = shell.clone();
+        let win = window.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(delay as u64), move || {
+            let probes: [(&str, &gtk4::Widget); 8] = [
+                ("menu", menu_btn.upcast_ref()),
+                ("engine", engine_btn.upcast_ref()),
+                ("star", star_btn.upcast_ref()),
+                ("entry", entry.upcast_ref()),
+                ("sidebar-toggle", sidebar_btn.upcast_ref()),
+                ("palette-entry", palette_entry.upcast_ref()),
+                ("sidebar-head", sidebar_head.upcast_ref()),
+                ("tab-bar", tab_bar.upcast_ref()),
+            ];
+            for (name, widget) in probes {
+                match widget.compute_bounds(&window) {
+                    Some(rect) => eprintln!(
+                        "br0x: bounds {name} x={} y={} w={} h={}",
+                        rect.x() as i32,
+                        rect.y() as i32,
+                        rect.width() as i32,
+                        rect.height() as i32
+                    ),
+                    None => eprintln!("br0x: bounds {name} unbounded"),
+                }
+            }
+            if std::env::var_os("BR0X_SHOT_DUMP").is_some() {
+                for (name, widget) in probes {
+                    match widget.compute_bounds(&win) {
+                        Some(rect) => eprintln!(
+                            "br0x: bounds {name} x={} y={} w={} h={}",
+                            rect.x() as i32,
+                            rect.y() as i32,
+                            rect.width() as i32,
+                            rect.height() as i32
+                        ),
+                        None => eprintln!("br0x: bounds {name} unbounded"),
+                    }
+                }
+            }
+            // BR0X_SHOT_HOLD keeps the surface up so an external capture can
+            // grab the popup's own X window instead of painting it in-process.
+            if let Ok(hold) = std::env::var("BR0X_SHOT_HOLD") {
+                let seconds = hold.parse::<u32>().unwrap_or(6);
+                match open.as_str() {
+                    "menu" => menu_btn.popup(),
+                    "palette" => shell_for_shot.toggle_palette(),
+                    _ => {}
+                }
+                glib::timeout_add_local_once(
+                    std::time::Duration::from_secs(seconds as u64),
+                    || std::process::exit(0),
+                );
+                return;
+            }
+            let target: gtk4::Widget = match open.as_str() {
+                "menu" => {
+                    menu_btn.popup();
+                    // A popover's surface is not paintable in-process, so
+                    // allocate its content explicitly and paint that.
+                    let (_, natural) = menu_body.preferred_size();
+                    menu_body.allocate(natural.width(), natural.height(), -1, None);
+                    eprintln!(
+                        "br0x: popup visible={} size={}x{}",
+                        menu_btn.popover().map(|p| p.is_visible()).unwrap_or(false),
+                        natural.width(),
+                        natural.height()
+                    );
+                    menu_body.upcast()
+                }
+                "palette" => {
+                    shell_for_shot.toggle_palette();
+                    card.upcast()
+                }
+                _ => win.clone().upcast(),
+            };
+            // One more beat for the new surface to allocate before painting.
+            glib::timeout_add_local_once(std::time::Duration::from_millis(400), move || {
+                let w = target.width().max(1);
+                let h = target.height().max(1);
+                let renderer = target.native().and_then(|n| n.renderer());
+                let paintable = gtk4::WidgetPaintable::new(Some(&target));
+                let snapshot = gtk4::Snapshot::new();
+                paintable.snapshot(&snapshot, w as f64, h as f64);
+                match (snapshot.to_node(), renderer) {
+                    (Some(node), Some(renderer)) => {
+                        let texture = renderer.render_texture(&node, None);
+                        match texture.save_to_png(&path) {
+                            Ok(()) => eprintln!("br0x: shot saved {path} ({w}x{h})"),
+                            Err(e) => eprintln!("br0x: shot save failed: {e}"),
+                        }
+                    }
+                    (None, _) => eprintln!("br0x: shot produced no node"),
+                    (_, None) => eprintln!("br0x: shot has no renderer"),
+                }
+                std::process::exit(0);
+            });
+        });
+    }
 }
 
 /// One isolated bench tab: a real WebView that is never appended to the tab
@@ -6233,37 +6212,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn scheme_chrome_pins_light_surfaces() {
-        let css = scheme_chrome_css(Appearance::Light);
-        assert!(css.contains("headerbar"), "header bar pinned");
-        assert!(css.contains(".br0x-sidebar"), "sidebar pinned");
-        assert!(css.contains("#ffffff"), "light header pin present");
-        assert!(!css.contains("#1e1e1e"), "no dark pins in light CSS");
-    }
-
-    #[test]
-    fn scheme_chrome_pins_dark_surfaces() {
-        let css = scheme_chrome_css(Appearance::Dark);
-        assert!(css.contains("headerbar"), "header bar pinned");
-        assert!(css.contains(".br0x-sidebar"), "sidebar pinned");
-        assert!(!css.contains("#ffffff"), "no light pins in dark CSS");
-    }
-
-    #[test]
-    fn scheme_chrome_system_pins_nothing() {
-        assert!(scheme_chrome_css(Appearance::System).is_empty());
-    }
-
-    #[test]
-    fn fuzzy_score_ranks_tight_matches_first() {
-        assert_eq!(fuzzy_score("", "anything"), Some(0));
-        assert_eq!(fuzzy_score("xyz", "GitHub"), None);
-        assert_eq!(fuzzy_score("gh", "GitHub"), Some(3));
-        assert_eq!(fuzzy_score("GH", "github"), Some(3));
-        assert!(fuzzy_score("git", "GitHub") < fuzzy_score("gth", "GitHub"));
-    }
-
-    #[test]
     fn percent_decodes_escapes_and_plus() {
         assert_eq!(percent_decode("rust%20web+kit"), "rust web kit");
         assert_eq!(percent_decode("100%25%2B"), "100%+");
@@ -6297,41 +6245,33 @@ mod tests {
 
     #[test]
     fn start_page_is_stale_only_when_its_inputs_change() {
-        use Appearance as A;
+        use theme::Scheme as S;
         fn visit(url: &str, title: &str, at: i64) -> Visit {
             Visit { url: url.to_string(), title: title.to_string(), visited_at: at }
         }
         let sites = vec![visit("https://a.example", "A", 10)];
-        let cached = (SearchEngine::DuckDuckGo, sites.clone(), A::System);
+        let cached = (SearchEngine::DuckDuckGo, sites.clone(), S::Light);
         // Nothing written yet: the page has to be built.
-        assert!(newtab_page_stale(None, SearchEngine::DuckDuckGo, &sites, A::System));
-        assert!(!newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &sites, A::System));
+        assert!(newtab_page_stale(None, SearchEngine::DuckDuckGo, &sites, S::Light));
+        assert!(!newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &sites, S::Light));
         // Engine, list content, list order and scheme all change the page.
-        assert!(newtab_page_stale(Some(&cached), SearchEngine::Google, &sites, A::System));
-        assert!(newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &sites, A::Dark));
+        assert!(newtab_page_stale(Some(&cached), SearchEngine::Google, &sites, S::Light));
+        assert!(newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &sites, S::Dark));
         let mut more = sites.clone();
         more.push(visit("https://b.example", "B", 20));
-        assert!(newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &more, A::System));
+        assert!(newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &more, S::Light));
         let reordered = vec![more[1].clone(), sites[0].clone()];
-        assert!(newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &reordered, A::System));
-        assert!(newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &[], A::System));
+        assert!(newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &reordered, S::Light));
+        assert!(newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &[], S::Light));
         // Titles are card text, so a retitle must rewrite.
         let retitled = vec![visit("https://a.example", "A renamed", 10)];
-        assert!(newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &retitled, A::System));
-    }
-
-    #[test]
-    fn scheme_tokens_match_the_chrome() {
-        assert_eq!(scheme_token(Appearance::System), "light dark");
-        assert_eq!(scheme_token(Appearance::Light), "light");
-        assert_eq!(scheme_token(Appearance::Dark), "dark");
+        assert!(newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &retitled, S::Light));
     }
 
     #[test]
     fn reader_script_carries_the_scheme() {
-        assert!(reader_extract_js(Appearance::Light).contains("color-scheme:light}"));
-        assert!(reader_extract_js(Appearance::Dark).contains("color-scheme:dark}"));
-        assert!(reader_extract_js(Appearance::System).contains("color-scheme:light dark}"));
+        assert!(reader_extract_js(theme::Scheme::Light).contains("color-scheme:light}"));
+        assert!(reader_extract_js(theme::Scheme::Dark).contains("color-scheme:dark}"));
     }
 
     #[test]
