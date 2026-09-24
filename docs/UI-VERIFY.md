@@ -51,11 +51,18 @@ scripts/interact.sh click 1045 28 /tmp/menu-open.png   # x y from BR0X_SHOT_DUMP
 
 ## Rules the code enforces
 
-- Chrome colors come from libadwaita tokens (`var(--sidebar-bg-color)`,
-  `@headerbar_bg_color`), never from hex values, or the surface cannot follow
-  the theme variant. `theme::SHELL_CSS` has a test for this.
-- One scheme decision drives both the toolkit variant and the internal pages:
-  `theme::apply` returns what the toolkit actually did, and the pages are built
-  from that answer.
+- `theme.rs` paints two sheets. `chrome_css(scheme)` carries the palette and is
+  loaded at `CHROME_PRIORITY` (user + 1) so a hand-written `gtk.css` cannot leave
+  the chrome dark under a light setting; `SHELL_CSS` carries layout only, and a
+  test fails if a palette value leaks into it.
+- One scheme decision drives the toolkit variant, the painted chrome, and the
+  internal pages. `theme::apply` records the answer, and `theme::applied` is
+  what the page builders read.
+- The palette values are libadwaita's own light and dark token values, so the
+  painted chrome matches the platform greys. Read them from the shipped
+  stylesheet with the `@define-color` search in this file's history.
 - A popover taller than the window is silently not shown at all, so menus that
-  can grow go inside a `ScrolledWindow`.
+  can grow go inside a `ScrolledWindow```. Adjust the row height before the cap:
+  the full menu is 26 rows at 26 px plus separators.
+- The `background` shorthand does nothing in GTK CSS. Use `background-color`,
+  which is how the address field kept a user theme's dark fill.

@@ -167,10 +167,38 @@ pub(crate) fn favicon_path(key: &str) -> String {
     data_file(&format!("favicons/{key}.png"))
 }
 
+/// Keep the icon folder from growing without bound. Icons are cheap and the
+/// cache is useful, so this only runs once at startup and only when the folder
+/// is far larger than a browsing session would produce.
+pub fn prune_favicons(limit: usize) {
+    let dir = data_file("favicons");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    let mut icons: Vec<(std::time::SystemTime, std::path::PathBuf)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            Some((modified, path))
+        })
+        .collect();
+    if icons.len() <= limit {
+        return;
+    }
+    icons.sort_by_key(|(modified, _)| *modified);
+    for (_, path) in icons.iter().take(icons.len() - limit) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 /// Filesystem-safe key for a host: lowercase, no `www.`, and nothing outside
 /// `[a-z0-9.-]`. Ports, paths and traversal attempts all fold to `_`.
 pub fn favicon_key(host: &str) -> String {
-    let host = host.trim().trim_start_matches("www.").to_ascii_lowercase();
+    // Lowercase first: hosting a site at WWW.example.com and example.com
+    // must land on one key, and the `www.` strip is case sensitive.
+    let host = host.trim().to_ascii_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host);
     let mut key: String = host
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
@@ -300,8 +328,11 @@ fn register_br0x_scheme(context: &webkit6::WebContext, history: Rc<RefCell<Optio
     }
     context.register_uri_scheme("br0x", move |request| {
         let uri = request.uri().map(|u| u.to_string()).unwrap_or_default();
-        if let Some(key) = uri.strip_prefix("br0x://favicon/") {
-            match std::fs::read(favicon_path(key)) {
+        if let Some(raw) = uri.strip_prefix("br0x://favicon/") {
+            // Same normalization as the write path: a URI is attacker-shaped
+            // input, and `../` would otherwise read outside the icon folder.
+            let key = favicon_key(raw);
+            match std::fs::read(favicon_path(&key)) {
                 Ok(png) => {
                     let bytes = glib::Bytes::from_owned(png);
                     let stream = gio::MemoryInputStream::from_bytes(&bytes);
@@ -3920,6 +3951,7 @@ fn build_ui(app: &adw::Application) {
     if let Some(display) = gtk4::gdk::Display::default() {
         install_theme(&display);
     }
+    prune_favicons(500);
     theme::apply(prefs.borrow().appearance);
     eprintln!("br0x: memory: {MEMORY_REPORT}");
 
@@ -5290,6 +5322,29 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The scheme handler reads icons by key, and a URI is attacker-shaped
+    /// input: the same normalization as the write path has to hold on read.
+    #[test]
+    fn favicon_keys_cannot_escape_the_icon_folder() {
+        for hostile in ["../../etc/passwd", "..%2f..%2fsecret", "a/../../../b", "C:\\x"] {
+            let key = favicon_key(hostile);
+            assert!(!key.contains('/'), "slash survived in {key:?}");
+            assert!(!key.contains('\\'), "backslash survived in {key:?}");
+            assert!(!key.starts_with('.'), "leading dot survived in {key:?}");
+            // The property that matters: the file always lands inside the
+            // icon folder, whatever the URI tried.
+            let path = std::path::PathBuf::from(favicon_path(&key));
+            assert_eq!(
+                path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()),
+                Some("favicons"),
+                "{key:?} escaped the icon folder"
+            );
+        }
+        assert_eq!(favicon_key("WWW.GitHub.com"), "github.com");
+        assert_eq!(favicon_key("example.com:8443"), "example.com_8443");
+        assert!(favicon_path(&favicon_key("github.com")).ends_with("br0x/favicons/github.com.png"));
+    }
 
     #[test]
     fn percent_decodes_escapes_and_plus() {

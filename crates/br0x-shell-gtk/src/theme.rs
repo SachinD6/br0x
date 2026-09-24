@@ -602,10 +602,22 @@ mod tests {
         }
     }
 
+    /// Every surface that carries text must set its own foreground too: a
+    /// painted background with an inherited colour is how a light chrome ends
+    /// up with dark-mode text on it.
     #[test]
-    fn system_follows_the_toolkit() {
-        // Only a compile-time sanity check: `System` is the one mode that
-        // reads the toolkit, and it is handled in `apply`.
-        assert_ne!(Appearance::System, Appearance::Light);
+    fn surfaces_carry_their_foreground() {
+        for scheme in [Scheme::Light, Scheme::Dark] {
+            let css = chrome_css(scheme);
+            let surfaces = css.matches("background-color").count();
+            let foregrounds = css.matches("color:").count();
+            assert!(
+                foregrounds >= surfaces / 2,
+                "{:?} paints {surfaces} surfaces with only {foregrounds} colour rules",
+                scheme
+            );
+            assert!(css.contains(chrome(scheme).window_fg));
+            assert!(css.contains(chrome(scheme).sidebar_fg));
+        }
     }
 }
