@@ -280,7 +280,7 @@ fn history_row(url: &str, title: &str, domain: &str, time: &str) -> String {
         title = html_escape(title),
         domain = html_escape(domain),
         haystack = html_escape(&haystack),
-        fav = favicon_img(domain, &letter),
+        fav = avatar_tile(&letter),
         time = html_escape(time),
     )
 }
@@ -491,14 +491,6 @@ fn history_html(
     }}
     .fav-letter {{
       line-height: 1;
-    }}
-    .fav-img {{
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      background-color: light-dark(#ffffff, #242424);
     }}
     td.col-when {{
       color: light-dark(#757575, #9e9e9e);
@@ -856,7 +848,7 @@ fn site_card(url: &str, name: &str, key: Option<&str>, class: &str) -> String {
         class = html_escape(class),
         url = html_escape(url),
         key_attr = key_attr,
-        fav = favicon_img(domain, &letter),
+        fav = avatar_tile(&letter),
         name = html_escape(name),
         domain = html_escape(domain),
         key_badge = key_badge,
@@ -872,12 +864,11 @@ fn frequent_name(visit: &Visit) -> String {
     }
 }
 
-/// Favicon via a lightweight icon service, with a letter fallback when the
-/// image fails to load (offline or unknown host).
-fn favicon_img(domain: &str, letter: &str) -> String {
+/// Local letter tile. Favicons once came from a remote icon service, which
+/// disclosed every visited domain to a third party on each new tab.
+fn avatar_tile(letter: &str) -> String {
     format!(
-        r#"<span class="fav" aria-hidden="true"><span class="fav-letter">{letter}</span><img class="fav-img" src="https://icons.duckduckgo.com/ip3/{domain}.ico" alt="" loading="lazy" onerror="this.remove()"></span>"#,
-        domain = html_escape(domain),
+        r#"<span class="fav" aria-hidden="true"><span class="fav-letter">{letter}</span></span>"#,
         letter = html_escape(letter),
     )
 }
@@ -1120,14 +1111,6 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
     }}
     .fav-letter {{
       line-height: 1;
-    }}
-    .fav-img {{
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      background-color: light-dark(#ffffff, #262626);
     }}
     .card-text {{
       display: flex;
@@ -1402,13 +1385,6 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
           fl.className = 'fav-letter';
           fl.textContent = letter;
           fav.appendChild(fl);
-          var img = document.createElement('img');
-          img.className = 'fav-img';
-          img.loading = 'lazy';
-          img.alt = '';
-          img.src = 'https://icons.duckduckgo.com/ip3/' + domain + '.ico';
-          img.onerror = function() {{ this.remove(); }};
-          fav.appendChild(img);
           var text = document.createElement('span');
           text.className = 'card-text';
           var nm = document.createElement('span');
@@ -3905,16 +3881,37 @@ impl Shell {
         clear.set_tooltip_text(Some("Delete all locally stored history"));
         clear.add_css_class("destructive-action");
         let shell = self.clone();
+        let row_weak = clear_row.downgrade();
         clear.connect_clicked(move |_| {
-            if let Some(history) = shell.history.borrow().as_ref() {
-                match history.clear() {
-                    Ok(()) => shell.toasts.add_toast(adw::Toast::new("History cleared")),
-                    Err(e) => {
-                        eprintln!("br0x: history clear failed: {e}");
-                        shell.toasts.add_toast(adw::Toast::new("Could not clear history"));
+            // Same guard as the history page: one mis-click must never
+            // wipe the local store.
+            let dialog = adw::AlertDialog::builder()
+                .heading("Clear browsing history?")
+                .body("Every locally stored visit is deleted. This cannot be undone.")
+                .build();
+            dialog.add_responses(&[("cancel", "_Cancel"), ("clear", "_Clear")]);
+            dialog.set_response_appearance("clear", adw::ResponseAppearance::Destructive);
+            dialog.set_default_response(Some("cancel"));
+            dialog.set_close_response("cancel");
+            let confirmed = shell.clone();
+            let row_confirmed = row_weak.clone();
+            dialog.connect_response(Some("clear"), move |_, _| {
+                if let Some(history) = confirmed.history.borrow().as_ref() {
+                    match history.clear() {
+                        Ok(()) => {
+                            if let Some(row) = row_confirmed.upgrade() {
+                                row.set_subtitle("0 entries stored on this device.");
+                            }
+                            confirmed.toasts.add_toast(adw::Toast::new("History cleared"));
+                        }
+                        Err(e) => {
+                            eprintln!("br0x: history clear failed: {e}");
+                            confirmed.toasts.add_toast(adw::Toast::new("Could not clear history"));
+                        }
                     }
                 }
-            }
+            });
+            dialog.present(Some(&shell.window));
         });
         clear_row.add_suffix(&clear);
         history_group.add(&clear_row);
