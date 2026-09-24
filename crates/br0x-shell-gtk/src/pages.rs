@@ -367,6 +367,8 @@ pub fn history_html(history: &History, query: Option<&str>, clear: bool, scheme:
     const filter = document.getElementById('history-filter');
     const root = document.getElementById('history-tbody');
     const noMatches = document.getElementById('no-matches');
+    const countEl = document.querySelector('.count');
+    const totalLabel = countEl ? countEl.textContent : '';
     if (filter && root) {{
       filter.addEventListener('input', () => {{
         const q = filter.value.trim().toLowerCase();
@@ -384,7 +386,14 @@ pub fn history_html(history: &History, query: Option<&str>, clear: bool, scheme:
           group.style.display = anyVisible ? '' : 'none';
         }});
         if (noMatches) {{
-          noMatches.style.display = (rows.length > 0 && visibleCount === 0) ? 'block' : 'none';
+          noMatches.style.display = visibleCount === 0 ? 'block' : 'none';
+        }}
+        // The header count must describe what is on screen, not what is
+        // stored: leaving the old total there contradicts the filtered list.
+        if (countEl) {{
+          countEl.textContent = q === ''
+            ? totalLabel
+            : (visibleCount + ' of ' + rows.length);
         }}
       }});
     }}

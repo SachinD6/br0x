@@ -971,7 +971,7 @@ struct Shell {
     find_entry: gtk4::SearchEntry,
     find_status: gtk4::Label,
     toasts: adw::ToastOverlay,
-    zoom_toast: RefCell<Option<adw::Toast>>,
+    transient_toast: RefCell<Option<adw::Toast>>,
     last_session: RefCell<Vec<StoredTab>>,
     last_save: RefCell<Option<Instant>>,
     last_sample: RefCell<Option<(Instant, br0x_core::tab::SysState)>>,
@@ -1777,7 +1777,22 @@ impl Shell {
             .and_then(|v| v.uri().map(|u| u.to_string()))
             .map(|uri| origin_of(&uri))
             .unwrap_or_default();
-        for entry in self.vault.borrow().credentials_for(&origin) {
+        let saved = self.vault.borrow().credentials_for(&origin);
+        if saved.is_empty() {
+            let hint = gtk4::Label::new(Some("No logins saved for this site"));
+            hint.set_xalign(0.0);
+            hint.add_css_class("dim-label");
+            hint.set_margin_top(8);
+            hint.set_margin_bottom(4);
+            hint.set_margin_start(12);
+            hint.set_margin_end(12);
+            let row = gtk4::ListBoxRow::new();
+            row.set_child(Some(&hint));
+            row.set_selectable(false);
+            row.set_activatable(false);
+            self.key_list.append(&row);
+        }
+        for entry in saved {
             let label = gtk4::Label::new(Some(&format!("Fill login as {}", entry.username)));
             label.set_xalign(0.0);
             label.set_margin_top(6);
@@ -1788,7 +1803,12 @@ impl Shell {
             row.set_child(Some(&label));
             self.key_list.append(&row);
         }
-        let save = gtk4::Label::new(Some("Save this login"));
+        let save =
+            gtk4::Label::new(Some(if self.vault.borrow().credentials_for(&origin).is_empty() {
+                "Save this login"
+            } else {
+                "Save another login"
+            }));
         save.set_xalign(0.0);
         save.set_margin_top(6);
         save.set_margin_bottom(6);
@@ -1943,6 +1963,12 @@ impl Shell {
     /// collapse. Called on every refresh so the header can never lie.
     fn sync_sidebar_head(&self) {
         let rail = *self.sidebar_rail.borrow();
+        let count = self.tab_view.n_pages();
+        self.sidebar_head_label.set_text(&if count == 1 {
+            "1 tab".to_owned()
+        } else {
+            format!("{count} tabs")
+        });
         self.sidebar_head_label.set_visible(!rail);
         self.sidebar_collapse_btn.set_icon_name(if rail {
             "pan-end-symbolic"
@@ -2157,14 +2183,20 @@ impl Shell {
         self.refresh_sidebar();
     }
 
-    /// One transient toast at a time: rapid repeats (zoom keys) dismiss the
-    /// previous toast instead of queueing a trail of them.
+    /// One transient toast at a time: rapid repeats (zoom keys, repeated
+    /// downloads) replace the previous toast instead of queueing a trail.
+    /// Identical repeats are dropped outright, since the message is already
+    /// on screen.
     fn show_transient(&self, msg: &str) {
-        if let Some(old) = self.zoom_toast.borrow_mut().take() {
+        if let Some(old) = self.transient_toast.borrow_mut().take() {
+            if old.title().is_some_and(|t| t.as_str() == msg) {
+                self.toasts.add_toast(old);
+                return;
+            }
             old.dismiss();
         }
         let toast = adw::Toast::new(msg);
-        self.zoom_toast.borrow_mut().replace(toast.clone());
+        self.transient_toast.borrow_mut().replace(toast.clone());
         self.toasts.add_toast(toast);
     }
 
@@ -3894,7 +3926,7 @@ fn build_ui(app: &adw::Application) {
     // Vertical tab sidebar in a slide revealer: the show/hide animation is
     // the toolkit's own, no manual timers. The top tab bar keeps working
     // either way. Pinned tabs get their own icon row above the list.
-    let sidebar_label = gtk4::Label::new(Some("Tabs"));
+    let sidebar_label = gtk4::Label::new(Some("1 tab"));
     sidebar_label.set_xalign(0.0);
     sidebar_label.add_css_class("br0x-sidebar-title");
     let sidebar_collapse = gtk4::Button::from_icon_name("pan-start-symbolic");
@@ -4058,7 +4090,7 @@ fn build_ui(app: &adw::Application) {
         find_entry: find_entry.clone(),
         find_status,
         toasts: toasts.clone(),
-        zoom_toast: RefCell::new(None),
+        transient_toast: RefCell::new(None),
         last_session: RefCell::new(Vec::new()),
         last_save: RefCell::new(None),
         last_sample: RefCell::new(None),
