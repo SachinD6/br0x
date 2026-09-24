@@ -1175,10 +1175,10 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
       font-size: 12px;
       line-height: 1;
       cursor: pointer;
-      opacity: 0;
+      visibility: hidden;
     }}
     .pin:hover .pin-remove {{
-      opacity: 1;
+      visibility: visible;
     }}
     button.add-card {{
       display: flex;
@@ -1511,9 +1511,11 @@ fn newtab_html(engine: SearchEngine, frequent: &[Visit], appearance: Appearance)
       var typing = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
       if (typing) {{
         if (e.key === 'Escape') active.blur();
-        // Number shortcuts still work while the search box is empty.
-        if (active.value !== '' || !/^[1-6]$/.test(e.key)) return;
+        return;
       }}
+      // A modal dialog owns the keyboard while open: no shortcuts, and no
+      // focusing the search field behind it.
+      if (document.querySelector('#pin-modal.open')) return;
       if (e.key === '/') {{
         e.preventDefault();
         var input = document.getElementById('search-input');
@@ -2122,7 +2124,6 @@ struct Shell {
     last_sample: RefCell<Option<(Instant, br0x_core::tab::SysState)>>,
     /// Engine, frequent list and scheme the start page file was last built from.
     last_newtab: RefCell<Option<(SearchEngine, Vec<Visit>, Appearance)>>,
-    suggest_pop: gtk4::Popover,
     sidebar_reveal: gtk4::Revealer,
     sidebar_box: gtk4::Box,
     sidebar_pins: gtk4::FlowBox,
@@ -2841,12 +2842,14 @@ impl Shell {
         slot.set_margin_start(8);
         slot.set_margin_end(8);
         // Fixed-width unread marker instead of a text prefix: the title
-        // never shifts and long titles cannot ellipsize the dot away.
+        // never shifts and long titles cannot ellipsize the dot away. The
+        // marker stays allocated and fades, since hiding it would drop it
+        // from layout and jump every title sideways on arrival.
         let dot = gtk4::Label::new(Some("•"));
         dot.set_size_request(10, -1);
         dot.set_valign(gtk4::Align::Center);
         dot.add_css_class("sidebar-dot");
-        dot.set_visible(item.attention && !rail);
+        dot.set_opacity(if item.attention && !rail { 1.0 } else { 0.0 });
         slot.append(&dot);
         let icon = item
             .page
@@ -3091,7 +3094,7 @@ impl Shell {
                 if page_clone.is_selected()
                     && let Some(w) = window_weak.upgrade()
                 {
-                    w.set_title(Some(&format!("{t} — br0x")));
+                    w.set_title(Some(&format!("{} — br0x", strip_state_badges(t.as_ref()))));
                 }
             }
             if let Some(shell) = shell_weak.upgrade() {
@@ -3296,16 +3299,9 @@ impl Shell {
             }
         });
 
-        // Clicking the page dismisses the suggestion list. Capture phase
-        // only observes: the handler returns nothing, so page clicks
-        // behave exactly as before.
-        let pop = self.suggest_pop.clone();
-        let page_click = gtk4::GestureClick::new();
-        page_click.set_propagation_phase(gtk4::PropagationPhase::Capture);
-        page_click.connect_pressed(move |_, _, _, _| {
-            pop.popdown();
-        });
-        view.add_controller(page_click);
+        // Suggestion dismissal lives window-wide in build_ui: one capture
+        // observer on the toast overlay covers header, sidebar, tab bar,
+        // and page, so per-view handlers would only double up.
 
         // target=_blank and window.open land here. Returning the new view
         // makes WebKit load the request into it, form submission and all;
@@ -4578,15 +4574,16 @@ fn install_theme() {
             font-size: 11px;
         }
 
-        /* Close buttons appear on hover or keyboard focus only, so titles
-        keep their full width at rest. */
+        /* Close buttons hide without hit-testing at rest, so the right
+        edge of a row is never an invisible close target. Titles keep
+        their full width either way. */
         .sidebar-row .close-btn {
-            opacity: 0;
+            visibility: hidden;
         }
 
         .sidebar-row:hover .close-btn,
         .sidebar-row:focus-within .close-btn {
-            opacity: 1;
+            visibility: visible;
         }
 
         @keyframes sidebar-shimmer {
@@ -4858,6 +4855,27 @@ fn build_ui(app: &adw::Application) {
     toasts.set_child(Some(&toolbar));
     window.set_content(Some(&toasts));
 
+    // Window-wide suggestion dismissal: the list keeps autohide off so
+    // typing never loses the keyboard, and it lives on its own surface,
+    // so any capture click reaching the main surface is outside the list
+    // by construction. Clicks back into the entry only close it until the
+    // next keystroke reopens it. Losing window focus closes it too.
+    {
+        let pop = suggest_popover.clone();
+        let dismiss = gtk4::GestureClick::new();
+        dismiss.set_propagation_phase(gtk4::PropagationPhase::Capture);
+        dismiss.connect_pressed(move |_, _, _, _| {
+            pop.popdown();
+        });
+        toasts.add_controller(dismiss);
+        let pop = suggest_popover.clone();
+        window.connect_notify_local(Some("is-active"), move |w, _| {
+            if !w.is_active() {
+                pop.popdown();
+            }
+        });
+    }
+
     // History opens after first paint: suggestions, Frequent tiles and the
     // history page simply see an empty store until the database is ready,
     // instead of blocking the window on SQLite.
@@ -4899,7 +4917,6 @@ fn build_ui(app: &adw::Application) {
         last_save: RefCell::new(None),
         last_sample: RefCell::new(None),
         last_newtab,
-        suggest_pop: suggest_popover.clone(),
         sidebar_reveal: sidebar_reveal.clone(),
         sidebar_box: sidebar_box.clone(),
         sidebar_pins: sidebar_pins.clone(),
@@ -5061,12 +5078,9 @@ fn build_ui(app: &adw::Application) {
             let fallback = SuggestHit { url: search::resolve(&query, engine), page: None };
             let target = match suggestion_target(&urls.borrow(), selected, &query, engine) {
                 Some(hit) => hit,
-                None if selected.is_none() && popover.is_visible() => urls
-                    .borrow()
-                    .first()
-                    .filter(|hit| hit.page.is_some())
-                    .cloned()
-                    .unwrap_or(fallback),
+                None if selected.is_none() && popover.is_visible() => {
+                    urls.borrow().first().cloned().unwrap_or(fallback)
+                }
                 None => fallback,
             };
             popover.popdown();
