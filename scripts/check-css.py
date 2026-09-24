@@ -10,7 +10,10 @@ gate a commit.
 import re
 import sys
 
-SRC = sys.argv[1] if len(sys.argv) > 1 else "crates/br0x-shell-gtk/src/main.rs"
+SRC = sys.argv[1:] or [
+    "crates/br0x-shell-gtk/src/main.rs",
+    "crates/br0x-shell-gtk/src/pages.rs",
+]
 
 # Properties GTK4 CSS does not support. Using them fails silently: the widget
 # keeps looking wrong and the stylesheet reports no error.
@@ -92,14 +95,17 @@ def theme_css():
 
 
 def main():
-    src = open(SRC).read()
     problems = []
-    for label, css in extract(src):
-        check_balance(label, css, problems)
-        # Only GTK stylesheets are parsed by GTK. HTML blocks are rendered by
-        # WebKit, where position/overflow/cursor are all legal.
-        if label == "gtk-css":
-            check_gtk(label, css, problems)
+    seen = 0
+    for path in SRC:
+        src = open(path).read()
+        seen += len(extract(src))
+        for label, css in extract(src):
+            check_balance(f"{path}:{label}", css, problems)
+            # Only GTK stylesheets are parsed by GTK. HTML blocks are rendered
+            # by WebKit, where position/overflow/cursor are all legal.
+            if label == "gtk-css":
+                check_gtk(f"{path}:{label}", css, problems)
 
     css = theme_css()
     if css is None:
@@ -124,7 +130,7 @@ def main():
 
     for p in problems:
         print(p)
-    print(f"checked {len(extract(src))} embedded stylesheets + theme, {len(problems)} problems")
+    print(f"checked {seen} embedded stylesheets + theme, {len(problems)} problems")
     return 1 if problems else 0
 
 

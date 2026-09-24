@@ -2,6 +2,7 @@
 //! Thin UI over br0x-core policy. All timing rules live in core.
 
 mod bench;
+mod pages;
 mod theme;
 use adw::prelude::*;
 use br0x_core::bookmarks::{Bookmark, BookmarkStore};
@@ -157,7 +158,22 @@ fn xdg_home(dir: PathBuf, home_suffix: &str) -> PathBuf {
 }
 
 /// `$XDG_DATA_HOME/br0x/<name>`, as a string for the APIs that take `&str`.
-fn data_file(name: &str) -> String {
+/// file:// URL with the path percent-encoded: a space or non-ASCII word
+/// in $HOME must not break start-page identity checks elsewhere.
+pub(crate) fn file_url(path: &str) -> String {
+    let mut encoded = String::with_capacity(path.len() + 7);
+    for byte in path.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                encoded.push(byte as char);
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    format!("file://{encoded}")
+}
+
+pub(crate) fn data_file(name: &str) -> String {
     data_home().join("br0x").join(name).to_string_lossy().into_owned()
 }
 
@@ -177,433 +193,12 @@ fn prefs_path() -> String {
     data_file("prefs.json")
 }
 
-fn newtab_path() -> String {
-    data_file("newtab.html")
-}
-
-/// file:// URL with the path percent-encoded: a space or non-ASCII word
-/// in $HOME must not break start-page identity checks elsewhere.
-fn file_url(path: &str) -> String {
-    let mut encoded = String::with_capacity(path.len() + 7);
-    for byte in path.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
-                encoded.push(byte as char);
-            }
-            _ => encoded.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    format!("file://{encoded}")
-}
-
-fn newtab_url() -> String {
-    static CACHED: OnceLock<String> = OnceLock::new();
-    CACHED.get_or_init(|| file_url(&newtab_path())).clone()
-}
-
 fn history_path() -> String {
     data_file("history.db")
 }
 
 fn bookmarks_path() -> String {
     data_file("bookmarks.json")
-}
-
-fn html_escape(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for c in input.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            _ => out.push(c),
-        }
-    }
-    out
-}
-
-/// Display domain for cards and history rows. One helper shared by both
-/// pages so the strip-prefix logic lives in a single place.
-fn display_domain(url: &str) -> &str {
-    url.strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .and_then(|s| s.split('/').next())
-        .unwrap_or("local")
-}
-
-/// First letter for avatars, uppercased. Falls back to a bullet.
-fn avatar_letter(name: &str) -> String {
-    name.chars().next().unwrap_or('•').to_uppercase().to_string()
-}
-
-/// Day bucket label: Today, Yesterday, or a date.
-fn history_day_label(visited_at: i64, today_day: i32) -> String {
-    let day = (visited_at / 86_400) as i32;
-    let diff = today_day - day;
-    if diff <= 0 {
-        "Today".to_string()
-    } else if diff == 1 {
-        "Yesterday".to_string()
-    } else if let Ok(dt) = glib::DateTime::from_unix_local(visited_at)
-        && let Ok(s) = dt.format("%B %e, %Y")
-    {
-        s.to_string()
-    } else {
-        "Earlier".to_string()
-    }
-}
-
-fn history_time(visited_at: i64) -> String {
-    glib::DateTime::from_unix_local(visited_at)
-        .ok()
-        .and_then(|dt| dt.format("%H:%M").ok())
-        .map(|s| s.to_string())
-        .unwrap_or_default()
-}
-
-fn history_row(url: &str, title: &str, domain: &str, time: &str) -> String {
-    let letter = avatar_letter(domain);
-    // Pre-lowered haystack: the live filter reads the attribute instead of
-    // re-lowercasing the row text on every keystroke.
-    let haystack = format!("{title} {domain} {time}").to_lowercase();
-    format!(
-        r#"<tr class="history-row" data-search="{haystack}">
-            <td class="col-avatar">{fav}</td>
-            <td class="col-main">
-                <a class="entry-title" href="{url}">{title}</a>
-                <div class="entry-url">{domain}</div>
-            </td>
-            <td class="col-when">{time}</td>
-        </tr>"#,
-        url = html_escape(url),
-        title = html_escape(title),
-        domain = html_escape(domain),
-        haystack = html_escape(&haystack),
-        fav = avatar_tile(&letter),
-        time = html_escape(time),
-    )
-}
-
-/// The br0x://history page: a simple, clean list of past visits.
-fn history_html(
-    history: &History,
-    query: Option<&str>,
-    clear: bool,
-    scheme: theme::Scheme,
-) -> String {
-    if clear {
-        let _ = history.clear();
-    }
-    let visits = match query {
-        Some(q) if !q.is_empty() => history.search(q, 300).unwrap_or_default(),
-        _ => history.recent(300).unwrap_or_default(),
-    };
-    let today_day = glib::DateTime::now_local().map(|d| (d.to_unix() / 86_400) as i32).unwrap_or(0);
-    let mut sections: Vec<(String, String)> = Vec::new();
-    let mut last_day = i32::MIN;
-    for v in &visits {
-        // Cheap integer grouping; the formatted label is built only when a
-        // new day section actually starts.
-        let day = (v.visited_at / 86_400) as i32;
-        let domain = display_domain(&v.url).to_string();
-        let title = if v.title.is_empty() { v.url.clone() } else { v.title.clone() };
-        let row = history_row(&v.url, &title, &domain, &history_time(v.visited_at));
-        if day != last_day {
-            let section = history_day_label(v.visited_at, today_day);
-            if last_day != i32::MIN
-                && let Some((_, body)) = sections.last_mut()
-            {
-                body.push_str("</tbody></table>");
-            }
-            sections.push((
-                section.clone(),
-                format!("<h2 class=\"day\">{section}</h2><table><tbody>{row}"),
-            ));
-            last_day = day;
-        } else if let Some((_, body)) = sections.last_mut() {
-            body.push_str(&row);
-        }
-    }
-    if let Some((_, body)) = sections.last_mut() {
-        body.push_str("</tbody></table>");
-    }
-    let rows: String = sections
-        .into_iter()
-        .map(|(_, body)| format!("<section class=\"day-group\">{body}</section>"))
-        .collect();
-    let q = query.unwrap_or_default();
-    let total = history.count().unwrap_or(visits.len() as i64) as usize;
-    let count_label = if total > visits.len() {
-        format!("latest {} of {total} entries", visits.len())
-    } else {
-        format!("{} entries", visits.len())
-    };
-    let empty_state = if visits.is_empty() {
-        r#"<div class="empty-notice">
-          <p class="empty-title">No history yet</p>
-          <p class="empty-sub">Pages you visit will show up here.</p>
-        </div>"#
-            .to_string()
-    } else {
-        String::new()
-    };
-    format!(
-        r#"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>History — br0x</title>
-  <style>
-    :root {{ color-scheme: {scheme}; }}
-    * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0;
-      background-color: light-dark(#ffffff, #1e1e1e);
-      color: light-dark(#1c1c1c, #e8e8e8);
-      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-      font-size: 14px;
-      line-height: 1.5;
-    }}
-    .wrap {{
-      max-width: 760px;
-      margin: 0 auto;
-      padding: 40px 24px 80px;
-      animation: fade 150ms ease-out;
-    }}
-    @keyframes fade {{
-      from {{ opacity: 0; }}
-      to {{ opacity: 1; }}
-    }}
-    @media (prefers-reduced-motion: reduce) {{
-      .wrap {{ animation: none; }}
-    }}
-    .header-panel {{
-      position: sticky;
-      top: 0;
-      z-index: 5;
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-      padding: 16px 0 12px;
-      margin-bottom: 8px;
-      background: color-mix(in srgb, light-dark(#ffffff, #1e1e1e) 88%, transparent);
-      backdrop-filter: blur(12px);
-      border-bottom: 1px solid light-dark(#eef0f4, #2d2d2d);
-    }}
-    .title-group {{
-      display: flex;
-      align-items: baseline;
-      gap: 10px;
-    }}
-    h1 {{
-      font-size: 26px;
-      font-weight: 750;
-      letter-spacing: -0.4px;
-      margin: 0;
-    }}
-    .count {{
-      font-size: 13px;
-      color: light-dark(#616161, #9e9e9e);
-    }}
-    .btn-clear {{
-      color: light-dark(#616161, #9e9e9e);
-      text-decoration: none;
-      font-size: 13px;
-      padding: 7px 14px;
-      border-radius: 9999px;
-      border: 1px solid light-dark(#e0e0e0, #3d3d3d);
-      background: light-dark(#ffffff, #262626);
-    }}
-    .btn-clear:hover {{
-      background-color: light-dark(#f5f5f5, #2d2d2d);
-    }}
-    .filter-box {{
-      margin: 12px 0 20px;
-    }}
-    .filter-box input {{
-      width: 100%;
-      background-color: light-dark(#ffffff, #262626);
-      border: 1px solid light-dark(#e2e5ec, #3d3d3d);
-      border-radius: 14px;
-      padding: 11px 15px;
-      color: inherit;
-      font: inherit;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-    }}
-    .filter-box input:focus {{
-      outline: none;
-      border-color: AccentColor;
-      box-shadow: 0 0 0 3px color-mix(in srgb, AccentColor 16%, transparent);
-    }}
-    h2.day {{
-      font-size: 12px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.6px;
-      color: light-dark(#5f6672, #9e9e9e);
-      margin: 26px 0 6px;
-    }}
-    table {{
-      width: 100%;
-      border-collapse: collapse;
-      background: light-dark(#ffffff, #242424);
-      border: 1px solid light-dark(#eaf0f4, #333);
-      border-radius: 14px;
-      overflow: hidden;
-    }}
-    tr.history-row {{
-      border-bottom: 1px solid light-dark(#f0f2f6, #2e2e2e);
-    }}
-    tr.history-row:last-child {{
-      border-bottom: none;
-    }}
-    tr.history-row:hover {{
-      background-color: light-dark(#f7f9fc, #2b2b2b);
-    }}
-    td {{
-      padding: 10px 10px;
-      vertical-align: middle;
-    }}
-    td.col-avatar {{
-      width: 40px;
-    }}
-    .avatar {{
-      display: none;
-    }}
-    .fav {{
-      position: relative;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 28px;
-      height: 28px;
-      flex: none;
-      border-radius: 8px;
-      background-color: light-dark(#eef1f6, #333);
-      overflow: hidden;
-      font-size: 12px;
-      font-weight: 700;
-      color: light-dark(#5b6472, #c9c9c9);
-    }}
-    .fav-letter {{
-      line-height: 1;
-    }}
-    td.col-when {{
-      color: light-dark(#757575, #9e9e9e);
-      font-size: 12px;
-      white-space: nowrap;
-      width: 56px;
-      text-align: right;
-    }}
-    td.col-main {{
-      word-break: break-all;
-    }}
-    a.entry-title {{
-      color: inherit;
-      text-decoration: none;
-      font-weight: 550;
-    }}
-    a.entry-title:hover {{
-      text-decoration: underline;
-    }}
-    .entry-url {{
-      color: light-dark(#757575, #9e9e9e);
-      font-size: 12px;
-      margin-top: 1px;
-    }}
-    .empty-notice {{
-      text-align: center;
-      padding: 48px 0;
-    }}
-    .empty-title {{
-      font-size: 16px;
-      font-weight: 600;
-      margin: 0 0 4px;
-    }}
-    .empty-sub {{
-      color: light-dark(#757575, #9e9e9e);
-      font-size: 13px;
-      margin: 0;
-    }}
-    @media (max-width: 560px) {{
-      .wrap {{ padding: 24px 14px 60px; }}
-      td.col-avatar {{ display: none; }}
-      td.col-when {{ width: 44px; }}
-      h1 {{ font-size: 22px; }}
-    }}
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="header-panel">
-      <div class="title-group">
-        <h1>History</h1>
-        <span class="count">{count_label}</span>
-      </div>
-      <div class="actions">
-        <a class="btn-clear" href="br0x://history?clear=1" onclick="return confirm('Clear entire local browsing history?');">Clear…</a>
-      </div>
-    </div>
-    <form method="get" action="br0x://history">
-      <div class="filter-box">
-        <input id="history-filter" name="q" value="{q}" placeholder="Filter history…" autocomplete="off">
-      </div>
-    </form>
-    <div id="history-tbody">
-      {rows}
-    </div>
-    {empty_state}
-    <div id="no-matches" class="empty-notice" style="display: none;">
-      <p class="empty-title">No matching entries</p>
-      <p class="empty-sub">Try a different filter.</p>
-    </div>
-  </div>
-  <script>
-    const filter = document.getElementById('history-filter');
-    const root = document.getElementById('history-tbody');
-    const noMatches = document.getElementById('no-matches');
-    if (filter && root) {{
-      filter.addEventListener('input', () => {{
-        const q = filter.value.trim().toLowerCase();
-        const rows = root.querySelectorAll('.history-row');
-        let visibleCount = 0;
-        rows.forEach(row => {{
-          const text = row.dataset.search || row.textContent.toLowerCase();
-          const match = q === '' || text.includes(q);
-          row.style.display = match ? '' : 'none';
-          if (match) visibleCount++;
-        }});
-        root.querySelectorAll('.day-group').forEach(group => {{
-          const anyVisible = Array.from(group.querySelectorAll('.history-row'))
-            .some(r => r.style.display !== 'none');
-          group.style.display = anyVisible ? '' : 'none';
-        }});
-        if (noMatches) {{
-          noMatches.style.display = (rows.length > 0 && visibleCount === 0) ? 'block' : 'none';
-        }}
-      }});
-    }}
-  </script>
-  {clear_script}
-</body>
-</html>"#,
-        count_label = count_label,
-        scheme = scheme.token(),
-        q = html_escape(q),
-        empty_state = empty_state,
-        // After a wipe the tab URL still carries ?clear=1, which would wipe
-        // again on reload or Back. Drop the query so the URL is disarmed.
-        clear_script = if clear {
-            "<script>history.replaceState({}, '', 'br0x://history');</script>"
-        } else {
-            ""
-        },
-    )
 }
 
 /// Decode one query component: `%XX` escapes, and `+` as space.
@@ -679,7 +274,7 @@ fn register_br0x_scheme(context: &webkit6::WebContext, history: Rc<RefCell<Optio
         let uri = request.uri().map(|u| u.to_string()).unwrap_or_default();
         let (query, clear) = history_request(&uri);
         let html = match history.borrow_mut().as_mut() {
-            Some(h) => history_html(h, query.as_deref(), clear, crate::theme::current()),
+            Some(h) => pages::history_html(h, query.as_deref(), clear, crate::theme::current()),
             None => "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
                 <style>:root{color-scheme:light dark}body{font-family:system-ui,sans-serif;\
                 display:flex;min-height:100vh;align-items:center;justify-content:center;\
@@ -776,741 +371,6 @@ fn connect_downloads(session: &webkit6::NetworkSession, toasts: &adw::ToastOverl
     });
 }
 
-/// Write the start page file. A file keeps the page offline, instant, and
-/// user editable. False when the write failed, so the caller keeps the page
-/// marked stale and retries instead of serving the old one forever.
-fn write_newtab_page(engine: SearchEngine, frequent: &[Visit], scheme: theme::Scheme) -> bool {
-    let path = newtab_path();
-    if let Some(parent) = std::path::Path::new(&path).parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if std::fs::write(&path, newtab_html(engine, frequent, scheme)).is_err() {
-        eprintln!("br0x: could not write {path}");
-        return false;
-    }
-    true
-}
-
-/// True when the start page file no longer matches the inputs it was built
-/// from. Frequent embeds live history, so the engine alone is not a safe
-/// key: titles and visit times shape the cards and order too.
-fn newtab_page_stale(
-    cached: Option<&(SearchEngine, Vec<Visit>, theme::Scheme)>,
-    engine: SearchEngine,
-    frequent: &[Visit],
-    scheme: theme::Scheme,
-) -> bool {
-    cached.is_none_or(|(cached_engine, cached_frequent, cached_appearance)| {
-        *cached_engine != engine
-            || *cached_appearance != scheme
-            || cached_frequent.as_slice() != frequent
-    })
-}
-
-/// Write the start page only when it is stale, and return its file URL
-/// either way. Repeats with an unchanged engine and history — every Ctrl+T —
-/// cost a comparison instead of a rewrite of the whole page.
-fn sync_newtab_page(
-    last: &RefCell<Option<(SearchEngine, Vec<Visit>, theme::Scheme)>>,
-    engine: SearchEngine,
-    frequent: &[Visit],
-    scheme: theme::Scheme,
-) -> String {
-    let stale = {
-        let cached = last.borrow();
-        newtab_page_stale(cached.as_ref(), engine, frequent, scheme)
-    };
-    if stale && write_newtab_page(engine, frequent, scheme) {
-        last.replace(Some((engine, frequent.to_vec(), scheme)));
-    }
-    newtab_url()
-}
-
-/// One site tile: real favicon over a letter fallback, name and domain.
-/// `key` adds a silent number-key shortcut; `class` extends the styling.
-fn site_card(url: &str, name: &str, key: Option<&str>, class: &str) -> String {
-    let domain = display_domain(url);
-    let letter = avatar_letter(name);
-    let key_attr = key.map(|k| format!(" data-key=\"{}\"", html_escape(k))).unwrap_or_default();
-    let key_badge = key
-        .map(|k| format!("<kbd class=\"key-badge\">{}</kbd>", html_escape(k)))
-        .unwrap_or_default();
-    format!(
-        r#"<a class="card {class}" href="{url}" title="{url}"{key_attr}>
-            {fav}
-            <span class="card-text"><span class="card-name">{name}</span><span class="card-domain">{domain}</span></span>
-            {key_badge}
-        </a>"#,
-        class = html_escape(class),
-        url = html_escape(url),
-        key_attr = key_attr,
-        fav = avatar_tile(&letter),
-        name = html_escape(name),
-        domain = html_escape(domain),
-        key_badge = key_badge,
-    )
-}
-/// Human name for a frequent URL. Raw URLs and URL-looking titles fall
-/// back to the domain so tiles never show query strings.
-fn frequent_name(visit: &Visit) -> String {
-    if !visit.title.is_empty() && visit.title != visit.url && !visit.title.starts_with("http") {
-        visit.title.clone()
-    } else {
-        display_domain(&visit.url).to_string()
-    }
-}
-
-/// Local letter tile. Favicons once came from a remote icon service, which
-/// disclosed every visited domain to a third party on each new tab.
-fn avatar_tile(letter: &str) -> String {
-    format!(
-        r#"<span class="fav" aria-hidden="true"><span class="fav-letter">{letter}</span></span>"#,
-        letter = html_escape(letter),
-    )
-}
-
-const SHORTCUTS: [(&str, &str, &str); 6] = [
-    ("1", "GitHub", "https://github.com"),
-    ("2", "YouTube", "https://youtube.com"),
-    ("3", "Reddit", "https://reddit.com"),
-    ("4", "Hacker News", "https://news.ycombinator.com"),
-    ("5", "Wikipedia", "https://wikipedia.org"),
-    ("6", "Mail", "https://mail.google.com"),
-];
-
-fn newtab_html(engine: SearchEngine, frequent: &[Visit], scheme: theme::Scheme) -> String {
-    let (action, param) = engine.form();
-    let items: String =
-        SHORTCUTS.iter().map(|(key, name, url)| site_card(url, name, Some(key), "")).collect();
-    let frequent_cards: String = frequent
-        .iter()
-        .take(8)
-        .map(|v| site_card(&v.url, &frequent_name(v), None, "frequent-card"))
-        .collect();
-    let frequent_count = frequent.iter().take(8).len();
-    let frequent_section = if frequent_cards.is_empty() {
-        String::new()
-    } else {
-        format!(
-            r#"<h2 class="section-title">Frequent <span class="section-count">· {frequent_count}</span></h2><nav class="grid" id="frequent-grid">{frequent_cards}</nav>"#
-        )
-    };
-    let empty_hint = if frequent_cards.is_empty() {
-        r#"<div class="hint-card"><p class="hint-title">A fresh start</p><p class="hint-sub">Sites you visit will appear here. Star pages with Ctrl+D to find them in the header menu.</p></div>"#
-            .to_string()
-    } else {
-        String::new()
-    };
-    format!(
-        r#"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>New Tab — br0x</title>
-  <style>
-    :root {{ color-scheme: {scheme}; }}
-    * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0;
-      background-color: light-dark(#ffffff, #1e1e1e);
-      color: light-dark(#1c1c1c, #e8e8e8);
-      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-      font-size: 14px;
-      line-height: 1.5;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }}
-    .wrap {{
-      max-width: 640px;
-      margin: 0 auto;
-      padding: 11vh 24px 40px;
-      width: 100%;
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-    }}
-    .wordmark {{
-      font-size: clamp(32px, 6vw, 42px);
-      font-weight: 800;
-      letter-spacing: -1.2px;
-      margin: 0;
-    }}
-    .hero {{
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      text-align: center;
-      animation: rise 200ms ease-out both;
-    }}
-    @keyframes rise {{
-      from {{ opacity: 0; transform: translateY(8px); }}
-      to {{ opacity: 1; transform: none; }}
-    }}
-    @keyframes pop {{
-      from {{ opacity: 0; transform: scale(0.96) translateY(4px); }}
-      to {{ opacity: 1; transform: none; }}
-    }}
-    .wordmark .zero {{
-      color: AccentColor;
-    }}
-    .subtitle {{
-      color: light-dark(#616161, #9e9e9e);
-      font-size: 14px;
-      margin: 6px 0 0;
-    }}
-    .date-line {{
-      color: light-dark(#5f6672, #9e9e9e);
-      font-size: 13px;
-      margin: 4px 0 0;
-    }}
-    form {{
-      width: 100%;
-      margin: 30px 0 8px;
-    }}
-    .search-wrap {{
-      position: relative;
-      width: 100%;
-    }}
-    .search-icon {{
-      position: absolute;
-      left: 16px;
-      top: 50%;
-      transform: translateY(-50%);
-      opacity: 0.45;
-      pointer-events: none;
-    }}
-    .search-field {{
-      width: 100%;
-      background-color: light-dark(#ffffff, #2d2d2d);
-      border: 1px solid light-dark(#e2e5ec, #3d3d3d);
-      border-radius: 16px;
-      padding: 14px 92px 14px 42px;
-      color: inherit;
-      font: inherit;
-      font-size: 15px;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 12px 32px rgba(0, 0, 0, 0.08);
-      transition: border-color 150ms ease, box-shadow 150ms ease;
-    }}
-    .engine-badge {{
-      position: absolute;
-      right: 12px;
-      top: 50%;
-      transform: translateY(-50%);
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: 0.2px;
-      color: light-dark(#5f6672, #a9a9a9);
-      background: light-dark(#f1f4f9, #3a3a3a);
-      border: 1px solid light-dark(#e2e5ec, #4a4a4a);
-      border-radius: 9999px;
-      padding: 3px 9px;
-      pointer-events: none;
-      white-space: nowrap;
-    }}
-    .search-field:focus {{
-      outline: none;
-      border-color: AccentColor;
-      box-shadow: 0 0 0 3px color-mix(in srgb, AccentColor 16%, transparent);
-    }}
-    .search-field::placeholder {{
-      color: light-dark(#767676, #a9a9a9);
-    }}
-    .grid {{
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 10px;
-      width: 100%;
-      margin-top: 12px;
-    }}
-    @media (max-width: 640px) {{
-      .wrap {{ padding-top: 7vh; }}
-    }}
-    @media (max-width: 480px) {{
-      .grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
-      .search-field {{ padding: 12px 84px 12px 15px; font-size: 14px; }}
-    }}
-    a.card {{
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      min-width: 0;
-      color: inherit;
-      text-decoration: none;
-      background-color: light-dark(#ffffff, #262626);
-      border: 1px solid light-dark(#e8eaf0, #383838);
-      border-radius: 16px;
-      padding: 12px 14px;
-      transition: transform 130ms ease-out, box-shadow 130ms ease-out, border-color 130ms ease-out;
-      animation: rise 200ms ease-out both;
-    }}
-    .grid .card:nth-child(2) {{ animation-delay: 25ms; }}
-    .grid .card:nth-child(3) {{ animation-delay: 50ms; }}
-    .grid .card:nth-child(4) {{ animation-delay: 75ms; }}
-    .grid .card:nth-child(5) {{ animation-delay: 100ms; }}
-    .grid .card:nth-child(6) {{ animation-delay: 125ms; }}
-    .grid .card:nth-child(7) {{ animation-delay: 150ms; }}
-    .grid .card:nth-child(8) {{ animation-delay: 175ms; }}
-    a.card:hover {{
-      transform: translateY(-1px);
-      border-color: light-dark(#c3ccd9, #4a4a4a);
-      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.1);
-    }}
-    .section-count {{
-      font-weight: 600;
-      color: light-dark(#5f6672, #9e9e9e);
-    }}
-    .hint-card {{
-      width: 100%;
-      margin-top: 22px;
-      text-align: center;
-      border: 1px dashed light-dark(#c9cfda, #4a4a4a);
-      border-radius: 16px;
-      padding: 20px 16px;
-      background: color-mix(in srgb, AccentColor 7%, transparent);
-    }}
-    .hint-title {{
-      margin: 0 0 4px;
-      font-size: 14px;
-      font-weight: 600;
-    }}
-    .hint-sub {{
-      margin: 0;
-      font-size: 13px;
-      color: light-dark(#616161, #9e9e9e);
-    }}
-    .section-title {{
-      width: 100%;
-      font-size: 12px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.6px;
-      color: light-dark(#5f6672, #a9a9a9);
-      margin: 26px 0 10px;
-    }}
-    .fav {{
-      position: relative;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 32px;
-      height: 32px;
-      flex: none;
-      border-radius: 10px;
-      background-color: light-dark(#eef1f6, #333);
-      overflow: hidden;
-      font-size: 13px;
-      font-weight: 700;
-      color: light-dark(#5b6472, #c9c9c9);
-    }}
-    .fav-letter {{
-      line-height: 1;
-    }}
-    .card-text {{
-      display: flex;
-      flex-direction: column;
-      min-width: 0;
-      flex: 1;
-    }}
-    .card-name {{
-      font-size: 14px;
-      font-weight: 550;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }}
-    .card-domain {{
-      font-size: 11px;
-      color: light-dark(#5f6672, #9e9e9e);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }}
-    .key-badge {{
-      margin-left: auto;
-      flex: none;
-      font-size: 11px;
-      font-weight: 600;
-      color: light-dark(#5f6672, #a9a9a9);
-      border: 1px solid light-dark(#e2e5ec, #3d3d3d);
-      border-radius: 6px;
-      padding: 1px 6px;
-    }}
-    .pin {{
-      position: relative;
-    }}
-    .pin-remove {{
-      position: absolute;
-      top: 6px;
-      right: 6px;
-      width: 20px;
-      height: 20px;
-      border: 0;
-      border-radius: 50%;
-      background: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.12));
-      color: inherit;
-      font-size: 12px;
-      line-height: 1;
-      cursor: pointer;
-      visibility: hidden;
-    }}
-    .pin:hover .pin-remove {{
-      visibility: visible;
-    }}
-    button.add-card {{
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      width: 100%;
-      border: 1px dashed light-dark(#c9cfda, #4a4a4a);
-      border-radius: 16px;
-      padding: 12px 14px;
-      background: transparent;
-      color: light-dark(#6b7280, #a0a0a0);
-      font: inherit;
-      font-size: 13px;
-      cursor: pointer;
-    }}
-    button.add-card:hover {{
-      border-color: AccentColor;
-      color: AccentColor;
-    }}
-    footer {{
-      margin-top: 40px;
-      color: light-dark(#767676, #a9a9a9);
-      font-size: 12px;
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: center;
-      gap: 8px 16px;
-    }}
-    footer a {{
-      color: inherit;
-      text-decoration: none;
-    }}
-    footer a:hover {{
-      text-decoration: underline;
-    }}
-    @media (prefers-reduced-motion: reduce) {{
-      .hero, .grid .card, .modal-backdrop.open .modal {{
-        animation: none;
-      }}
-      a.card, .search-field, button.add-card {{
-        transition: none;
-      }}
-    }}
-    .hint {{
-      color: light-dark(#5f6672, #9e9e9e);
-    }}
-    .modal-backdrop {{
-      position: fixed;
-      inset: 0;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-      background: light-dark(rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0.65));
-      z-index: 50;
-    }}
-    .modal-backdrop.open {{
-      display: flex;
-    }}
-    .modal-backdrop.open .modal {{
-      animation: pop 160ms ease-out;
-    }}
-    .modal {{
-      width: 100%;
-      max-width: 380px;
-      background: light-dark(#ffffff, #262626);
-      border: 1px solid light-dark(#e8eaf0, #3d3d3d);
-      border-radius: 20px;
-      padding: 22px;
-      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.25);
-    }}
-    .modal h3 {{
-      margin: 0 0 4px;
-      font-size: 16px;
-    }}
-    .modal p {{
-      margin: 0 0 14px;
-      font-size: 13px;
-      color: light-dark(#616161, #9e9e9e);
-    }}
-    .modal label {{
-      display: block;
-      font-size: 12px;
-      font-weight: 600;
-      margin: 10px 0 4px;
-      color: light-dark(#424242, #c9c9c9);
-    }}
-    .modal input {{
-      width: 100%;
-      padding: 10px 12px;
-      border-radius: 12px;
-      border: 1px solid light-dark(#e2e5ec, #3d3d3d);
-      background: light-dark(#f7f8fa, #1e1e1e);
-      color: inherit;
-      font: inherit;
-      font-size: 14px;
-    }}
-    .modal input:focus {{
-      outline: none;
-      border-color: AccentColor;
-      box-shadow: 0 0 0 3px color-mix(in srgb, AccentColor 16%, transparent);
-    }}
-    .modal-error {{
-      display: none;
-      font-size: 12px;
-      color: light-dark(#b3261e, #f2a8a8);
-      margin-top: 8px;
-    }}
-    .modal-actions {{
-      display: flex;
-      gap: 10px;
-      margin-top: 18px;
-    }}
-    .btn-primary, .btn-ghost {{
-      flex: 1;
-      padding: 10px;
-      border-radius: 9999px;
-      font: inherit;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-    }}
-    .btn-primary {{
-      border: 0;
-      background: AccentColor;
-      color: AccentColorText;
-    }}
-    .btn-ghost {{
-      border: 1px solid light-dark(#e2e5ec, #3d3d3d);
-      background: transparent;
-      color: inherit;
-    }}
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="hero">
-      <h1 class="wordmark">br<span class="zero">0</span>x</h1>
-      <p class="subtitle" id="greeting">A calm place to start browsing</p>
-      <p class="date-line" id="date-line"></p>
-    </div>
-    <form action="{action}" method="get">
-      <div class="search-wrap">
-        <svg class="search-icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="11" y1="11" x2="14.5" y2="14.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-        <input class="search-field" id="search-input" name="{param}" placeholder="Search {engine_name} or enter address" autocomplete="off" spellcheck="false">
-        <span class="engine-badge">{engine_name}</span>
-      </div>
-    </form>
-    {frequent_section}
-    {empty_hint}
-    <h2 class="section-title">Shortcuts <span class="section-count">· 6</span></h2>
-    <nav class="grid">
-      {items}
-    </nav>
-    <h2 class="section-title">Your shortcuts <span class="section-count" id="pins-count"></span></h2>
-    <nav class="grid" id="pins-grid"></nav>
-    <div style="width:100%;margin-top:10px"><button class="add-card" id="add-pin" type="button">+ Add shortcut</button></div>
-    <footer>
-      <span>{engine_name}</span>
-      <a href="br0x://history">History</a>
-      <span class="hint">Ctrl+L address · Ctrl+T new tab · / search</span>
-    </footer>
-  </div>
-  <div class="modal-backdrop" id="pin-modal" role="dialog" aria-modal="true" aria-labelledby="pin-modal-title">
-    <div class="modal">
-      <h3 id="pin-modal-title">Add shortcut</h3>
-      <p>Pin a site to this start page.</p>
-      <label for="pin-name">Name</label>
-      <input id="pin-name" maxlength="40" placeholder="Example" autocomplete="off">
-      <label for="pin-url">Website address</label>
-      <input id="pin-url" placeholder="https://…" inputmode="url" autocomplete="off">
-      <div class="modal-error" id="pin-error">Enter a valid address, like https://example.com</div>
-      <div class="modal-actions">
-        <button class="btn-ghost" id="pin-cancel" type="button">Cancel</button>
-        <button class="btn-primary" id="pin-save" type="button">Add</button>
-      </div>
-    </div>
-  </div>
-  <script>
-    (function() {{
-      var h = new Date().getHours();
-      var g = h < 5 ? "Good night" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
-      var el = document.getElementById('greeting');
-      if (el) el.textContent = g + " — a calm place to start";
-      var dateEl = document.getElementById('date-line');
-      if (dateEl) dateEl.textContent = new Date().toLocaleDateString(undefined, {{ weekday: 'long', month: 'long', day: 'numeric' }});
-    }})();
-    (function() {{
-      var KEY = 'br0x-pins';
-      function load() {{
-        try {{ return JSON.parse(localStorage.getItem(KEY) || '[]'); }}
-        catch (e) {{ return []; }}
-      }}
-      function save(pins) {{
-        try {{ localStorage.setItem(KEY, JSON.stringify(pins)); }}
-        catch (e) {{}}
-      }}
-      function domainOf(url) {{
-        var m = /^https?:\/\/([^/]+)/i.exec(url || '');
-        return m ? m[1] : url;
-      }}
-      function render() {{
-        var grid = document.getElementById('pins-grid');
-        if (!grid) return;
-        grid.textContent = '';
-        var pins = load();
-        var count = document.getElementById('pins-count');
-        if (count) count.textContent = pins.length ? '· ' + pins.length : '';
-        pins.forEach(function(pin, idx) {{
-          var a = document.createElement('a');
-          a.className = 'card pin';
-          a.href = pin.url;
-          a.title = pin.url;
-          var domain = domainOf(pin.url);
-          var letter = (pin.name || domain).charAt(0).toUpperCase();
-          var fav = document.createElement('span');
-          fav.className = 'fav';
-          fav.setAttribute('aria-hidden', 'true');
-          var fl = document.createElement('span');
-          fl.className = 'fav-letter';
-          fl.textContent = letter;
-          fav.appendChild(fl);
-          var text = document.createElement('span');
-          text.className = 'card-text';
-          var nm = document.createElement('span');
-          nm.className = 'card-name';
-          nm.textContent = pin.name || domain;
-          var dm = document.createElement('span');
-          dm.className = 'card-domain';
-          dm.textContent = domain;
-          text.appendChild(nm);
-          text.appendChild(dm);
-          var x = document.createElement('button');
-          x.className = 'pin-remove';
-          x.type = 'button';
-          x.title = 'Remove';
-          x.textContent = '×';
-          x.onclick = function(ev) {{
-            ev.preventDefault();
-            ev.stopPropagation();
-            var pins = load();
-            pins.splice(idx, 1);
-            save(pins);
-            render();
-          }};
-          a.appendChild(fav);
-          a.appendChild(text);
-          a.appendChild(x);
-          grid.appendChild(a);
-        }});
-      }}
-      function validUrl(raw) {{
-        var url = (raw || '').trim();
-        if (!url) return '';
-        if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
-        try {{
-          var u = new URL(url);
-          if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
-          return u.href;
-        }} catch (e) {{ return ''; }}
-      }}
-      function openModal() {{
-        var modal = document.getElementById('pin-modal');
-        var err = document.getElementById('pin-error');
-        if (err) err.style.display = 'none';
-        if (!modal) return;
-        modal.classList.add('open');
-        var name = document.getElementById('pin-name');
-        var url = document.getElementById('pin-url');
-        if (name) name.value = '';
-        if (url) url.value = '';
-        setTimeout(function() {{ if (url) url.focus(); }}, 30);
-      }}
-      function closeModal() {{
-        var modal = document.getElementById('pin-modal');
-        if (modal) modal.classList.remove('open');
-      }}
-      function submitModal() {{
-        var nameEl = document.getElementById('pin-name');
-        var urlEl = document.getElementById('pin-url');
-        var err = document.getElementById('pin-error');
-        var url = validUrl(urlEl && urlEl.value);
-        if (!url) {{
-          if (err) err.style.display = 'block';
-          if (urlEl) urlEl.focus();
-          return;
-        }}
-        var domain = domainOf(url);
-        var name = (nameEl && nameEl.value.trim()) || domain;
-        var pins = load();
-        pins.push({{ name: name, url: url }});
-        save(pins);
-        render();
-        closeModal();
-      }}
-      var add = document.getElementById('add-pin');
-      if (add) add.onclick = openModal;
-      var cancel = document.getElementById('pin-cancel');
-      if (cancel) cancel.onclick = closeModal;
-      var saveBtn = document.getElementById('pin-save');
-      if (saveBtn) saveBtn.onclick = submitModal;
-      var backdrop = document.getElementById('pin-modal');
-      if (backdrop) backdrop.addEventListener('click', function(e) {{
-        if (e.target === backdrop) closeModal();
-      }});
-      document.addEventListener('keydown', function(e) {{
-        var modal = document.getElementById('pin-modal');
-        if (modal && modal.classList.contains('open')) {{
-          if (e.key === 'Escape') closeModal();
-          if (e.key === 'Enter' && document.activeElement &&
-              (document.activeElement.id === 'pin-name' || document.activeElement.id === 'pin-url')) {{
-            e.preventDefault();
-            submitModal();
-            return;
-          }}
-        }}
-      }});
-      render();
-    }})();
-    document.addEventListener('keydown', function(e) {{
-      var active = document.activeElement;
-      var typing = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
-      if (typing) {{
-        if (e.key === 'Escape') active.blur();
-        return;
-      }}
-      // A modal dialog owns the keyboard while open: no shortcuts, and no
-      // focusing the search field behind it.
-      if (document.querySelector('#pin-modal.open')) return;
-      if (e.key === '/') {{
-        e.preventDefault();
-        var input = document.getElementById('search-input');
-        if (input) {{ input.focus(); input.select(); }}
-        return;
-      }}
-      var card = document.querySelector('.card[data-key="' + CSS.escape(e.key) + '"]');
-      if (card) {{
-        window.location.href = card.href;
-      }}
-    }});
-  </script>
-</body>
-</html>"#,
-        engine_name = engine.name(),
-        scheme = scheme.token(),
-        empty_hint = empty_hint,
-    )
-}
-
-/// WebKitGTK's default user agent is flagged by Google as a bot, which
-/// forces an "unusual traffic" captcha on every search. Send a current
-/// Chrome-on-Linux string instead.
 const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
 /// Settings for every view. Related (window.open) views do not inherit
@@ -1627,7 +487,7 @@ fn selected_view(tab_view: &adw::TabView) -> Option<webkit6::WebView> {
 }
 
 fn is_blank_uri(uri: &str) -> bool {
-    uri == "about:blank" || uri == newtab_url()
+    uri == "about:blank" || uri == pages::start_page_url()
 }
 
 /// Release `entry` if nothing blocks it. Sleeping is the time-based release
@@ -1691,8 +551,11 @@ fn render_suggestions(
     let mut store = urls.borrow_mut();
     store.clear();
     for (title, url, page) in tab_hits {
-        let name =
-            if title.trim().is_empty() { display_domain(url).to_owned() } else { title.clone() };
+        let name = if title.trim().is_empty() {
+            pages::display_domain(url).to_owned()
+        } else {
+            title.clone()
+        };
         let stack = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
         stack.set_margin_top(4);
         stack.set_margin_bottom(4);
@@ -1716,7 +579,7 @@ fn render_suggestions(
     }
     for visit in visits {
         let title = if visit.title.trim().is_empty() {
-            display_domain(&visit.url).to_owned()
+            pages::display_domain(&visit.url).to_owned()
         } else {
             visit.title.clone()
         };
@@ -1956,18 +819,6 @@ const HAS_PASSWORD_JS: &str =
 /// empty when there is nothing worth saving.
 const READ_LOGIN_JS: &str = r##"(()=>{var p=document.querySelector('input[type="password"]');if(!p||!p.value){return '';}var u='';if(p.form){var t=p.form.querySelector('input[type="email"],input[type="text"]');if(t){u=t.value||'';}}if(!u){var t2=document.querySelector('input[type="email"],input[type="text"]');if(t2){u=t2.value||'';}}return encodeURIComponent(u)+'|'+encodeURIComponent(p.value);})()"##;
 
-/// Dependency-free article extraction: score paragraphs by text length minus
-/// link text, keep the winning container, drop chrome, return a clean page
-/// (or empty when nothing article-like is found).
-const READER_EXTRACT_TEMPLATE: &str = r##"(()=>{function textLen(n){return ((n.innerText||'').trim().length);}function score(p){var t=(p.innerText||'').trim();if(t.length<40){return 0;}var links=Array.prototype.reduce.call(p.querySelectorAll('a'),function(n,a){return n+((a.innerText||'').length);},0);return t.length-links*2;}var ps=Array.prototype.slice.call(document.querySelectorAll('p'));var buckets=new Map();ps.forEach(function(p){var s=score(p);if(s<=0){return;}var a=p.parentElement;for(var i=0;i<3&&a;i++){buckets.set(a,(buckets.get(a)||0)+s);a=a.parentElement;}});var root=null;var best=0;buckets.forEach(function(v,k){if(v>best){best=v;root=k;}});if(!root||best<200){return '';}var clone=root.cloneNode(true);Array.prototype.forEach.call(clone.querySelectorAll('nav,aside,footer,header,form,script,style,noscript,iframe,canvas,.ad,.ads,.sidebar,.comments,#comments'),function(n){n.remove();});var title=(document.title||'').replace(/</g,'&lt;');var body=clone.innerHTML||'';return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+title+'</title><style>:root{color-scheme:light dark}body{margin:0 auto;max-width:38em;padding:2em 1.2em;font:18px/1.7 system-ui,sans-serif}img,video{max-width:100%;height:auto}pre{overflow:auto}</style></head><body><h1>'+title+'</h1>'+body+'</body></html>';})()"##;
-
-/// Reader script with the current appearance baked in, so the article view
-/// matches the shell chrome instead of only following the OS.
-fn reader_extract_js(scheme: theme::Scheme) -> String {
-    READER_EXTRACT_TEMPLATE
-        .replace("color-scheme:light dark", &format!("color-scheme:{}", scheme.token()))
-}
-
 /// Evaluate `script`, handing its string value (empty on failure) to `done`.
 fn eval_text(view: &webkit6::WebView, script: &str, done: impl FnOnce(String) + 'static) {
     let pending = view.evaluate_javascript_future(script, None, None);
@@ -2029,33 +880,6 @@ fn sync_entry_to_selection(tab_view: &adw::TabView, entry: &gtk4::Entry) {
     }
 }
 
-/// Friendly inline page for failed loads and crashed processes.
-fn error_html(heading: &str, message: &str, uri: &str, scheme: theme::Scheme) -> String {
-    format!(
-        r#"<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{heading} — br0x</title>
-<style>
-:root {{ color-scheme: {scheme}; }}
-body {{ margin: 0; font-family: system-ui, sans-serif; display: flex; min-height: 100vh;
-  align-items: center; justify-content: center; text-align: center;
-  background: light-dark(#fafafa, #1e1e1e); color: light-dark(#1c1c1c, #e8e8e8); }}
-.card {{ max-width: 420px; padding: 32px 28px; }}
-.icon {{ font-size: 40px; margin-bottom: 12px; }}
-h1 {{ font-size: 20px; margin: 0 0 8px; }}
-p {{ color: light-dark(#616161, #9e9e9e); font-size: 14px; margin: 0 0 6px; }}
-.url {{ font-size: 12px; word-break: break-all; }}
-button {{ margin-top: 18px; padding: 10px 22px; border-radius: 9999px; border: 0;
-  background: AccentColor; color: AccentColorText; font: inherit; cursor: pointer; }}
-</style></head>
-<body><div class="card"><div class="icon">○</div><h1>{heading}</h1><p>{message}</p>
-<p class="url">{uri}</p><button onclick="location.reload()">Reload</button></div></body></html>"#,
-        heading = html_escape(heading),
-        message = html_escape(message),
-        uri = html_escape(uri),
-        scheme = scheme.token(),
-    )
-}
 /// Friendly leading icon: magnifier on empty pages, lock on https,
 /// warning on http. Tapping it explains the site security.
 fn set_security_icon(entry: &gtk4::Entry, uri: &str) {
@@ -2271,7 +1095,7 @@ impl Shell {
     fn refresh_start_page(self: &Rc<Self>, engine: SearchEngine) -> String {
         let frequent = self.frequent_sites();
         let scheme = theme::current();
-        sync_newtab_page(&self.last_newtab, engine, &frequent, scheme)
+        pages::sync_newtab_page(&self.last_newtab, engine, &frequent, scheme)
     }
 
     fn add_tab(self: &Rc<Self>, url: &str, select: bool, load: bool, title: Option<&str>) {
@@ -2404,7 +1228,7 @@ impl Shell {
     /// Reload tabs currently showing the start page (fresh data after an
     /// engine switch).
     fn reload_start_pages(&self) {
-        let start = newtab_url();
+        let start = pages::start_page_url();
         for entry in self.tabs.borrow().entries.iter() {
             if entry.view.uri().is_some_and(|u| u.as_str() == start) {
                 entry.view.reload();
@@ -2462,7 +1286,7 @@ impl Shell {
         let tab_icon = "web-browser-symbolic";
         for (title, url, page) in self.all_tabs() {
             let name = if title.trim().is_empty() {
-                display_domain(&url).to_owned()
+                pages::display_domain(&url).to_owned()
             } else {
                 title.clone()
             };
@@ -2484,7 +1308,7 @@ impl Shell {
             if let Some(history) = self.history.borrow().as_ref() {
                 for visit in history.recent(60).unwrap_or_default() {
                     let name = if visit.title.trim().is_empty() {
-                        display_domain(&visit.url).to_owned()
+                        pages::display_domain(&visit.url).to_owned()
                     } else {
                         visit.title.clone()
                     };
@@ -2868,7 +1692,7 @@ impl Shell {
         let page = self.tab_view.selected_page();
         let shell = self.clone();
         let eval_view = view.clone();
-        let script = reader_extract_js(theme::current());
+        let script = pages::reader_extract_js(theme::current());
         eval_text(&eval_view, &script, move |html| {
             if html.is_empty() {
                 shell.toasts.add_toast(adw::Toast::new("No article found on this page"));
@@ -2918,7 +1742,7 @@ impl Shell {
             .network_session(&self.session)
             .settings(&settings)
             .build();
-        let safe = html_escape(url);
+        let safe = pages::html_escape(url);
         let html = format!(
             "<!doctype html><html><body style=\"margin:0;background:#000\">\
             <video src=\"{safe}\" controls autoplay \
@@ -3628,7 +2452,7 @@ impl Shell {
                 {
                     toasts_failed.add_toast(adw::Toast::new("Load failed"));
                     v.load_alternate_html(
-                        &error_html(
+                        &pages::error_html(
                             "Could not open this page",
                             "Check the address and your connection, then try again.",
                             uri,
@@ -3651,7 +2475,7 @@ impl Shell {
                 toasts_crashed.add_toast(adw::Toast::new("Page crashed"));
                 let uri = v.uri().map(|u| u.to_string()).unwrap_or_default();
                 v.load_alternate_html(
-                    &error_html(
+                    &pages::error_html(
                         "This page crashed",
                         "The page used too much memory or hit a bug. Your other tabs are safe.",
                         &uri,
@@ -3942,7 +2766,7 @@ impl Shell {
         for mark in &bookmarks {
             let row = adw::ActionRow::new();
             let name = if mark.title.is_empty() {
-                display_domain(&mark.url).to_owned()
+                pages::display_domain(&mark.url).to_owned()
             } else {
                 mark.title.clone()
             };
@@ -4836,7 +3660,7 @@ fn build_ui(app: &adw::Application) {
         RefCell::new(None);
     {
         let loaded = prefs.borrow();
-        sync_newtab_page(&last_newtab, loaded.engine, &[], theme::current());
+        pages::sync_newtab_page(&last_newtab, loaded.engine, &[], theme::current());
     }
 
     let session = shared_session();
@@ -6252,26 +5076,41 @@ mod tests {
         let sites = vec![visit("https://a.example", "A", 10)];
         let cached = (SearchEngine::DuckDuckGo, sites.clone(), S::Light);
         // Nothing written yet: the page has to be built.
-        assert!(newtab_page_stale(None, SearchEngine::DuckDuckGo, &sites, S::Light));
-        assert!(!newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &sites, S::Light));
+        assert!(pages::newtab_page_stale(None, SearchEngine::DuckDuckGo, &sites, S::Light));
+        assert!(!pages::newtab_page_stale(
+            Some(&cached),
+            SearchEngine::DuckDuckGo,
+            &sites,
+            S::Light
+        ));
         // Engine, list content, list order and scheme all change the page.
-        assert!(newtab_page_stale(Some(&cached), SearchEngine::Google, &sites, S::Light));
-        assert!(newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &sites, S::Dark));
+        assert!(pages::newtab_page_stale(Some(&cached), SearchEngine::Google, &sites, S::Light));
+        assert!(pages::newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &sites, S::Dark));
         let mut more = sites.clone();
         more.push(visit("https://b.example", "B", 20));
-        assert!(newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &more, S::Light));
+        assert!(pages::newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &more, S::Light));
         let reordered = vec![more[1].clone(), sites[0].clone()];
-        assert!(newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &reordered, S::Light));
-        assert!(newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &[], S::Light));
+        assert!(pages::newtab_page_stale(
+            Some(&cached),
+            SearchEngine::DuckDuckGo,
+            &reordered,
+            S::Light
+        ));
+        assert!(pages::newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &[], S::Light));
         // Titles are card text, so a retitle must rewrite.
         let retitled = vec![visit("https://a.example", "A renamed", 10)];
-        assert!(newtab_page_stale(Some(&cached), SearchEngine::DuckDuckGo, &retitled, S::Light));
+        assert!(pages::newtab_page_stale(
+            Some(&cached),
+            SearchEngine::DuckDuckGo,
+            &retitled,
+            S::Light
+        ));
     }
 
     #[test]
     fn reader_script_carries_the_scheme() {
-        assert!(reader_extract_js(theme::Scheme::Light).contains("color-scheme:light}"));
-        assert!(reader_extract_js(theme::Scheme::Dark).contains("color-scheme:dark}"));
+        assert!(pages::reader_extract_js(theme::Scheme::Light).contains("color-scheme:light}"));
+        assert!(pages::reader_extract_js(theme::Scheme::Dark).contains("color-scheme:dark}"));
     }
 
     #[test]
@@ -6321,7 +5160,7 @@ mod tests {
     #[test]
     fn blank_uris_are_recognised() {
         assert!(is_blank_uri("about:blank"));
-        assert!(is_blank_uri(&newtab_url()));
+        assert!(is_blank_uri(&pages::start_page_url()));
         assert!(!is_blank_uri(""));
         assert!(!is_blank_uri("br0x://history"));
         assert!(!is_blank_uri("https://example.com"));
