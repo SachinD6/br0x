@@ -398,6 +398,29 @@ tabbar tab button.tab-close-button:hover {
     opacity: 0.7;
 }
 
+/* State reads at a glance: parked is pressure, sleeping is the clock, and
+loading is neither, so only the first two take a hue. */
+.sidebar-badge.badge-sleeping {
+    color: var(--accent-bg-color);
+    opacity: 1;
+}
+
+.sidebar-badge.badge-parked {
+    color: var(--warning-bg-color, var(--accent-bg-color));
+    opacity: 1;
+}
+
+/* Pinned tabs get their own section label, like the tab list headers in the
+reference sidebar. */
+.sidebar-section {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.7px;
+    text-transform: uppercase;
+    opacity: 0.45;
+    margin: 6px 14px 2px;
+}
+
 .sidebar-dot {
     color: var(--accent-bg-color);
     font-size: 11px;
@@ -484,6 +507,15 @@ tabbar tab,
 .palette-card row {
     border-radius: 8px;
     margin: 1px 6px;
+}
+
+.palette-section {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.7px;
+    text-transform: uppercase;
+    opacity: 0.45;
+    margin: 8px 14px 2px;
 }
 
 .palette-card row:selected {
