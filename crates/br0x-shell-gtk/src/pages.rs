@@ -707,10 +707,10 @@ pub fn newtab_html(engine: SearchEngine, frequent: &[Visit], scheme: Scheme) -> 
       width: 100%;
       margin-top: 22px;
       text-align: center;
-      border: 1px dashed light-dark(#c9cfda, #4a4a4a);
-      border-radius: 16px;
-      padding: 20px 16px;
-      background: color-mix(in srgb, AccentColor 7%, transparent);
+      border: 1px solid light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.09));
+      border-radius: 14px;
+      padding: 20px 18px;
+      background: light-dark(rgba(0, 0, 0, 0.02), rgba(255, 255, 255, 0.03));
     }}
     .hint-title {{
       margin: 0 0 4px;
